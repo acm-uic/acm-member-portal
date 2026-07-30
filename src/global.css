@@ -1,0 +1,159 @@
+@import "tailwindcss";
+
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+  --background: #1b1b1d;
+  --bg: var(--background);
+  --surface1: #242526;
+  --surface2: #303846;
+  --surface3: #3b3d42;
+  --border: #ffffff12;
+  --border-visible: #ffffff1f;
+  --text1: #ffffff;
+  --text2: #b9bbc0;
+  --text3: #92959b;
+  --text4: #70737a;
+  --accent: #d90000;
+  --accent-subtle: #380000;
+  --success: #26b226;
+  --warning: #e6a700;
+  --error: #d53035;
+  --success-bg: #123d18;
+  --warning-bg: #4d3800;
+  --error-bg: #4b1113;
+  --font-display: "Archivo", Arial, sans-serif;
+  --font-body: "IBM Plex Sans", Arial, sans-serif;
+  --font-mono: "IBM Plex Mono", Consolas, monospace;
+  --display: 48px;
+  --heading: 32px;
+  --subheading: 22px;
+  --body: 16px;
+  --body-sm: 14px;
+  --caption: 12px;
+  --label: 13px;
+  --space-2xs: 2px;
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+  --space-2xl: 48px;
+  --space-3xl: 64px;
+  --space-4xl: 96px;
+  --radius-element: 4px;
+  --radius-control: 6px;
+  --radius-component: 12px;
+  --radius-container: 12px;
+  --radius-pill: 999px;
+  --shadow-card: 0 1px 2px #0000001a;
+  --shadow-overlay: 0 8px 24px #00000033;
+  --duration-fast: 120ms;
+  --duration-normal: 180ms;
+  --duration-slow: 240ms;
+  --ease-standard: ease-out;
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+  --background: #f7f7f8;
+  --bg: var(--background);
+  --surface1: #ffffff;
+  --surface2: #ebedf0;
+  --surface3: #d8d9dc;
+  --border: #d8d9dc;
+  --border-visible: #b9bbc0;
+  --text1: #111113;
+  --text2: #55585e;
+  --text3: #70737a;
+  --text4: #92959b;
+  --accent: #a60000;
+  --accent-subtle: #fff0f0;
+  --success: #26b226;
+  --warning: #b38200;
+  --error: #d53035;
+  --success-bg: #effbf1;
+  --warning-bg: #fff8e6;
+  --error-bg: #fff0f0;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-surface1: var(--surface1);
+  --color-surface2: var(--surface2);
+  --color-surface3: var(--surface3);
+  --color-border: var(--border);
+  --color-border-visible: var(--border-visible);
+  --color-text1: var(--text1);
+  --color-text2: var(--text2);
+  --color-text3: var(--text3);
+  --color-text4: var(--text4);
+  --color-accent: var(--accent);
+  --color-accent-subtle: var(--accent-subtle);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-error: var(--error);
+  --color-success-bg: var(--success-bg);
+  --color-warning-bg: var(--warning-bg);
+  --color-error-bg: var(--error-bg);
+  --font-display: var(--font-display);
+  --font-body: var(--font-body);
+  --font-mono: var(--font-mono);
+  --text-display: var(--display);
+  --text-heading: var(--heading);
+  --text-subheading: var(--subheading);
+  --text-body: var(--body);
+  --text-body-sm: var(--body-sm);
+  --text-caption: var(--caption);
+  --text-label: var(--label);
+  --spacing-2xs: var(--space-2xs);
+  --spacing-xs: var(--space-xs);
+  --spacing-sm: var(--space-sm);
+  --spacing-md: var(--space-md);
+  --spacing-lg: var(--space-lg);
+  --spacing-xl: var(--space-xl);
+  --spacing-2xl: var(--space-2xl);
+  --spacing-3xl: var(--space-3xl);
+  --spacing-4xl: var(--space-4xl);
+  --radius-element: var(--radius-element);
+  --radius-control: var(--radius-control);
+  --radius-component: var(--radius-component);
+  --radius-container: var(--radius-container);
+  --radius-pill: var(--radius-pill);
+  --shadow-card: var(--shadow-card);
+  --shadow-overlay: var(--shadow-overlay);
+  --ease-standard: var(--ease-standard);
+}
+
+@custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
+
+@utility duration-fast {
+  transition-duration: var(--duration-fast);
+}
+@utility duration-normal {
+  transition-duration: var(--duration-normal);
+}
+@utility duration-slow {
+  transition-duration: var(--duration-slow);
+}
+
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--text1);
+  font: 400 var(--body) / 1.65 var(--font-body);
+}
+
+:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 1ms !important;
+    animation-duration: 1ms !important;
+  }
+}

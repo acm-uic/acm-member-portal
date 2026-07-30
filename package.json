@@ -1,0 +1,46 @@
+{
+  "name": "acm-member-portal",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "vite --mode ssr",
+    "build": "npm run build.client && npm run build.server",
+    "build.client": "vite build",
+    "build.server": "vite build -c adapters/fastify/vite.config.ts",
+    "serve": "node server/entry.fastify.js",
+    "preview": "vite preview",
+    "check": "tsc --noEmit",
+    "test": "vitest run",
+    "db:migrate": "echo 'Phase 2 wires this to scripts/migrate.ts'",
+    "db:generate": "drizzle-kit generate",
+    "auth:generate": "npx auth@latest generate",
+    "fmt": "prettier --write ."
+  },
+  "dependencies": {
+    "@better-auth/drizzle-adapter": "^1.6.25",
+    "@builder.io/qwik": "1.20.0",
+    "@builder.io/qwik-city": "1.20.0",
+    "better-auth": "1.6.25",
+    "drizzle-orm": "^0.45.2",
+    "fastify": "^5.0.0",
+    "nodemailer": "^7.0.0",
+    "pg": "^8.16.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.3.3",
+    "@types/node": "^24.0.0",
+    "@types/nodemailer": "^8.0.1",
+    "@types/pg": "^8.15.0",
+    "drizzle-kit": "^0.31.4",
+    "prettier": "^3.0.0",
+    "tailwindcss": "4.3.3",
+    "typescript": "^5.8.0",
+    "vite": "~7.3.1",
+    "vite-tsconfig-paths": "^5.0.0",
+    "vitest": "^3.0.0"
+  }
+}

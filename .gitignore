@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+server/
+*.tsbuildinfo
+
+# Env files (never commit secrets)
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Agent state (local only — not source)
+.pi/
+
+# Workflow artifacts (local only — not source)
+.rpiv/
