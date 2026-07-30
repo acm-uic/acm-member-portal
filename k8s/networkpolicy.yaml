@@ -1,0 +1,34 @@
+# Default-deny egress; opens only DNS, CloudNativePG, public HTTPS/HTTP (dev-safe
+# fallback minus RFC1918). FQDN-scoped egress (login.microsoftonline.com, the
+# Windows API host) requires Cilium or Calico — README "Network policy" calls
+# this out. On a non-Cilium/non-Calico cluster, also deploy an outbound
+# firewall since 0.0.0.0/0 :443/80 is open here.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: portal-default-deny
+  namespace: acm-portal
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports: [{ port: 53, protocol: UDP }, { port: 53, protocol: TCP }]
+    - to:
+        - podSelector: { matchLabels: { cnpg.io/cluster: portal-db } }
+      ports: [{ port: 5432, protocol: TCP }]
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              [
+                10.0.0.0/8,
+                172.16.0.0/12,
+                192.168.0.0/16,
+                169.254.0.0/16,
+                127.0.0.0/8,
+                100.64.0.0/10,
+              ]
+      ports: [{ port: 443, protocol: TCP }, { port: 80, protocol: TCP }]

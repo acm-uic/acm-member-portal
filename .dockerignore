@@ -1,0 +1,10 @@
+.git
+.pi
+.rpiv
+node_modules
+dist
+server
+.vscode
+*.log
+.DS_Store
+README.md

@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: portal-worker
+  namespace: acm-portal
+  labels: { app: portal-worker }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: portal-worker } }
+  template:
+    metadata: { labels: { app: portal-worker } }
+    spec:
+      # Runs `node src/worker/index.ts provision` (Node 24+ strip-types loads .ts).
+      containers:
+        - name: provisioning
+          image: registry.example.com/acm/member-portal:latest
+          command:
+            [
+              "node",
+              "--experimental-strip-types",
+              "src/worker/index.ts",
+              "provision",
+            ]
+          envFrom:
+            - secretRef: { name: portal-secrets }
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+          securityContext:
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: portal-alumni-digest
+  namespace: acm-portal
+spec:
+  schedule: "0 6 * * *"
+  successfulJobsHistoryLimit: 7
+  failedJobsHistoryLimit: 7
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          # Runs `node src/worker/index.ts alumni` (nightly CronJob, 06:00 UTC).
+      containers:
+        - name: alumni-digest
+          image: registry.example.com/acm/member-portal:latest
+          command:
+            [
+              "node",
+              "--experimental-strip-types",
+              "src/worker/index.ts",
+              "alumni",
+            ]
+          envFrom:
+            - secretRef: { name: portal-secrets }
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 200m, memory: 256Mi }
+          securityContext:
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true

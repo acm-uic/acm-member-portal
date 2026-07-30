@@ -25,3 +25,6 @@ npm-debug.log*
 
 # Workflow artifacts (local only — not source)
 .rpiv/
+
+# Terraform working directory (downloaded providers); lock file is committed
+.terraform/

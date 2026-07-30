@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: portal
+  namespace: acm-portal
+  labels: { app: portal }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: portal } }
+  template:
+    metadata: { labels: { app: portal } }
+    spec:
+      initContainers:
+        - name: migrate
+          image: registry.example.com/acm/member-portal:latest
+          command: ["node", "scripts/migrate.ts"]
+          envFrom:
+            - secretRef: { name: portal-secrets }
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 200m, memory: 256Mi }
+      containers:
+        - name: portal
+          image: registry.example.com/acm/member-portal:latest
+          ports: [{ containerPort: 3000 }]
+          env:
+            - { name: PORT, value: "3000" }
+            - { name: ORIGIN, value: "https://portal.acm-uic.org" }
+            - { name: HOSTNAME, value: "0.0.0.0" }
+            - { name: BETTER_AUTH_URL, value: "https://portal.acm-uic.org" }
+          envFrom:
+            - secretRef: { name: portal-secrets }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 3000 }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: 3000 }
+            periodSeconds: 30
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+          securityContext:
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: portal
+  namespace: acm-portal
+spec:
+  selector: { app: portal }
+  ports: [{ name: http, port: 80, targetPort: 3000 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: portal
+  namespace: acm-portal
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: "1m"
+spec:
+  tls:
+    - hosts: [portal.acm-uic.org]
+      secretName: portal-tls
+  rules:
+    - host: portal.acm-uic.org
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service: { name: portal, port: { number: 80 } }
