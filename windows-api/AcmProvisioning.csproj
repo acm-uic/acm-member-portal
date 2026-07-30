@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>AcmProvisioning</RootNamespace>
+    <AssemblyName>AcmProvisioning</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- PowerShell SDK for the New-ADUser runspace -->
+    <PackageReference Include="System.Management.Automation" Version="7.4.6" />
+  </ItemGroup>
+
+</Project>
