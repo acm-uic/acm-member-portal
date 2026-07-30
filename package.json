@@ -14,8 +14,7 @@
     "preview": "vite preview",
     "check": "tsc --noEmit",
     "test": "vitest run",
-    "db:migrate": "echo 'Phase 2 wires this to scripts/migrate.ts'",
-    "db:generate": "drizzle-kit generate",
+    "db:migrate": "node scripts/migrate.ts",
     "auth:generate": "npx auth@latest generate",
     "fmt": "prettier --write ."
   },
