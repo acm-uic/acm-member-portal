@@ -1,15 +1,15 @@
 import { component$ } from "@builder.io/qwik";
 import type { FormFieldDef } from "~/lib/types";
 
-/**
- * Phase 5: signup use only — no pre-fill. Phase 8 adds an optional
- * `value?: string | string[]` prop for profile-edit pre-fill.
- */
 export const DynamicField = component$<{
 	field: FormFieldDef;
 	error?: string;
-}>(({ field, error }) => {
+	/** Pre-fill (profile edit). Signup omits it. (Added in Phase 8.) */
+	value?: string | string[];
+}>(({ field, error, value }) => {
 	const describedBy = error ? `${field.key}-error` : undefined;
+	const text = typeof value === "string" ? value : "";
+	const selected = Array.isArray(value) ? value : [];
 	return (
 		<div class="grid gap-xs">
 			<label for={field.key} class="text-label text-text2">
@@ -31,7 +31,9 @@ export const DynamicField = component$<{
 					aria-invalid={!!error}
 					aria-describedby={describedBy}
 					class="px-sm py-sm rounded-control bg-surface3 text-text1 border border-border focus:border-border-visible outline-none"
-				/>
+				>
+					{text}
+				</textarea>
 			) : field.type === "select" ? (
 				<select
 					id={field.key}
@@ -42,7 +44,7 @@ export const DynamicField = component$<{
 				>
 					<option value="">Select…</option>
 					{(field.options ?? []).map((o) => (
-						<option key={o.value} value={o.value}>
+						<option key={o.value} value={o.value} selected={text === o.value}>
 							{o.label}
 						</option>
 					))}
@@ -59,6 +61,7 @@ export const DynamicField = component$<{
 								type="checkbox"
 								name={field.key}
 								value={o.value}
+								checked={selected.includes(o.value)}
 								class="accent-accent"
 							/>
 							{o.label}
@@ -71,6 +74,7 @@ export const DynamicField = component$<{
 					name={field.key}
 					type="checkbox"
 					value="true"
+					checked={text === "true"}
 					aria-invalid={!!error}
 					class="accent-accent h-4 w-4"
 				/>
@@ -88,6 +92,7 @@ export const DynamicField = component$<{
 					inputMode={field.type === "number" ? "numeric" : undefined}
 					placeholder={field.placeholder}
 					maxLength={field.maxLength}
+					value={text}
 					aria-invalid={!!error}
 					aria-describedby={describedBy}
 					class="px-sm py-sm rounded-control bg-surface3 text-text1 border border-border focus:border-border-visible outline-none"
