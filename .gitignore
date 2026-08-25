@@ -26,5 +26,8 @@ npm-debug.log*
 # Workflow artifacts (local only — not source)
 .rpiv/
 
+# Local PGlite + stub mail (embedded dev mode)
+.data/
+
 # Terraform working directory (downloaded providers); lock file is committed
 .terraform/

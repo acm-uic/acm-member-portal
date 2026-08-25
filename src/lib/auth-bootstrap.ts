@@ -1,5 +1,6 @@
 import { desc, eq, sql } from "drizzle-orm";
 import { db } from "~/lib/db";
+import { isEmbeddedDb } from "~/lib/db/mode";
 import {
 	memberProfiles,
 	provisioningEvents,
@@ -19,7 +20,8 @@ const ROLE_IDS = {
 /**
  * Runs inside better-auth's databaseHooks.user.create.after.
  * Hook transactionality vs the user INSERT is undocumented, so this is
- * independently race-safe: an xact advisory lock serializes bootstrap checks.
+ * independently race-safe: an xact advisory lock serializes bootstrap checks
+ * (skipped on single-process PGlite).
  *
  *  - First registered user (count == 1, the just-created row) → admin + member.
  *  - Everyone else → member.
@@ -35,7 +37,9 @@ export async function bootstrapUser(u: {
 	displayName: string | null;
 }) {
 	await db.transaction(async (tx) => {
-		await tx.execute(sql`SELECT pg_advisory_xact_lock(${BOOTSTRAP_LOCK_ID})`);
+		if (!isEmbeddedDb()) {
+			await tx.execute(sql`SELECT pg_advisory_xact_lock(${BOOTSTRAP_LOCK_ID})`);
+		}
 
 		const [{ count }] = (
 			await tx.execute<{ count: number }>(

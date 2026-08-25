@@ -1,0 +1,162 @@
+# Default names match the old k8s/ manifests (Deployment/portal, Cluster/portal-db).
+nameOverride: ""
+fullnameOverride: "portal"
+
+image:
+  repository: ghcr.io/acm-uic/acm-member-portal
+  tag: latest
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# Public origin used for ORIGIN and BETTER_AUTH_URL. Empty derives https://<ingress.host>.
+origin: "https://portal.acmuic.org"
+
+replicaCount: 2
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 3000
+
+# Off by default. The cluster terminates TLS at Traefik; set enabled if you
+# want the chart to create a Kubernetes Ingress instead.
+ingress:
+  enabled: false
+  className: ""
+  host: portal.acmuic.org
+  annotations: {}
+  tls:
+    enabled: false
+    secretName: portal-tls
+
+# Existing Secret with BETTER_AUTH_SECRET, MICROSOFT_*, SMTP_*, WINDOWS_API_*.
+# Terraform creates this as portal-secrets (Entra keys only). For first boot,
+# apply k8s/secret.example.yaml or set secret.create.
+existingSecret: portal-secrets
+
+# When secret.create is true, the chart writes a Secret and ignores existingSecret.
+secret:
+  create: false
+  betterAuthSecret: ""
+  microsoftClientId: ""
+  microsoftClientSecret: ""
+  microsoftTenantId: ""
+  smtpHost: ""
+  smtpPort: "587"
+  smtpUser: ""
+  smtpPass: ""
+  smtpFrom: "ACM@UIC <portal@acm-uic.org>"
+  windowsApiUrl: "https://ad-api.acm.local"
+  windowsApiToken: ""
+
+# In-cluster CloudNativePG Cluster when enabled. Set enabled=false and fill in
+# host/url/existingSecret to use a database created outside this chart.
+database:
+  enabled: true
+  clusterName: portal-db
+  instances: 2
+  database: portal
+  owner: portal
+  storage:
+    size: 10Gi
+    storageClass: ""
+  enablePDB: false
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+  # External Postgres. Ignored while database.enabled is true.
+  # Provide one of:
+  #   - existingSecret + existingSecretUrlKey (Secret holds DATABASE_URL)
+  #   - url (plain connection string; avoid in production)
+  #   - host + password (user/port/database optional; chart builds DATABASE_URL)
+  host: ""
+  port: 5432
+  user: portal
+  password: ""
+  url: ""
+  existingSecret: ""
+  existingSecretUrlKey: DATABASE_URL
+  existingSecretPasswordKey: password
+
+worker:
+  enabled: true
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+alumniDigest:
+  enabled: true
+  schedule: "0 6 * * *"
+  successfulJobsHistoryLimit: 7
+  failedJobsHistoryLimit: 7
+  backoffLimit: 2
+  concurrencyPolicy: Forbid
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+migrate:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+podSecurityContext: {}
+
+securityContext:
+  runAsNonRoot: true
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+
+probes:
+  readiness:
+    path: /healthz
+    port: 3000
+    periodSeconds: 5
+  liveness:
+    path: /healthz
+    port: 3000
+    periodSeconds: 30
+
+networkPolicy:
+  enabled: true
+  # Extra CIDRs allowed on 5432. Used when database.enabled is false.
+  # Empty allows 0.0.0.0/0 on 5432 (needed for RFC1918 hosts; the HTTPS
+  # egress rule excludes private ranges).
+  databaseCidrs: []
+
+podAnnotations: {}
+podLabels: {}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+extraEnv: []
+extraEnvFrom: []

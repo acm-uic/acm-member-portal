@@ -1,0 +1,28 @@
+1. Chart {{ .Chart.Name }}-{{ .Chart.Version }} is installed as {{ .Release.Name }} in {{ .Release.Namespace }}.
+
+{{- if .Values.database.enabled }}
+
+2. Wait until CloudNativePG Cluster {{ .Values.database.clusterName }} is Ready. The migrate init container needs the database before it can run:
+
+   kubectl wait --for=condition=Ready --timeout=180s cluster/{{ .Values.database.clusterName }} -n {{ .Release.Namespace }}
+
+   DATABASE_URL is taken from Secret {{ include "acm-member-portal.databaseSecretName" . }} (key {{ include "acm-member-portal.databaseSecretKey" . }}).
+{{- else }}
+
+2. Using an external database. DATABASE_URL comes from Secret {{ include "acm-member-portal.databaseSecretName" . }} (key {{ include "acm-member-portal.databaseSecretKey" . }}).
+{{- end }}
+
+3. App credentials Secret: {{ include "acm-member-portal.secretName" . }} (BETTER_AUTH_SECRET, MICROSOFT_*, SMTP_*, WINDOWS_API_*).
+
+4. After pods are Ready:
+
+   kubectl get pods -n {{ .Release.Namespace }}
+   kubectl wait --for=condition=Ready --timeout=120s deployment/{{ include "acm-member-portal.fullname" . }} -n {{ .Release.Namespace }}
+   curl -fsS {{ include "acm-member-portal.origin" . }}/healthz
+
+{{- if .Values.alumniDigest.enabled }}
+
+5. Smoke-test the alumni digest:
+
+   kubectl create job --from=cronjob/{{ include "acm-member-portal.fullname" . }}-alumni-digest digest-smoke -n {{ .Release.Namespace }}
+{{- end }}
