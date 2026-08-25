@@ -1,0 +1,65 @@
+{{- if .Values.alumniDigest.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "acm-member-portal.fullname" . }}-alumni-digest
+  labels:
+    {{- include "acm-member-portal.labels" . | nindent 4 }}
+    app.kubernetes.io/component: alumni-digest
+spec:
+  schedule: {{ .Values.alumniDigest.schedule | quote }}
+  concurrencyPolicy: {{ .Values.alumniDigest.concurrencyPolicy }}
+  successfulJobsHistoryLimit: {{ .Values.alumniDigest.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.alumniDigest.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      backoffLimit: {{ .Values.alumniDigest.backoffLimit }}
+      template:
+        metadata:
+          labels:
+            {{- include "acm-member-portal.labels" . | nindent 12 }}
+            app.kubernetes.io/component: alumni-digest
+        spec:
+          restartPolicy: OnFailure
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.podSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: alumni-digest
+              image: {{ include "acm-member-portal.image" . }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              command:
+                - node
+                - "--experimental-strip-types"
+                - src/worker/index.ts
+                - alumni
+              env:
+                {{- include "acm-member-portal.databaseUrlEnv" . | nindent 16 }}
+                {{- with .Values.extraEnv }}
+                {{- toYaml . | nindent 16 }}
+                {{- end }}
+              {{- include "acm-member-portal.envFrom" . | nindent 14 }}
+              resources:
+                {{- toYaml .Values.alumniDigest.resources | nindent 16 }}
+              {{- with .Values.securityContext }}
+              securityContext:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+          {{- with .Values.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.affinity }}
+          affinity:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}

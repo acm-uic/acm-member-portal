@@ -1,0 +1,12 @@
+apiVersion: v2
+name: acm-member-portal
+description: ACM@UIC Qwik City member portal (SSR app, provision worker, alumni digest)
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+kubeVersion: ">=1.25.0-0"
+keywords:
+  - portal
+  - qwik
+  - postgres
+sources: []
