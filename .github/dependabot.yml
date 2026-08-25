@@ -1,16 +1,66 @@
 version: 2
 updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "saturday"
+      time: "07:00"
+      timezone: "America/Chicago"
+    labels:
+      - ":package: dependencies"
+      - ":robot: bot"
+    commit-message:
+      prefix: ":arrow_up:"
+
   - package-ecosystem: "bun"
     directory: "/"
     schedule:
       interval: "weekly"
+      day: "saturday"
+      time: "07:00"
+      timezone: "America/Chicago"
+    labels:
+      - ":package: dependencies"
+      - ":robot: bot"
+    commit-message:
+      prefix: ":arrow_up:"
 
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
       interval: "weekly"
+      day: "saturday"
+      time: "07:00"
+      timezone: "America/Chicago"
+    labels:
+      - ":package: dependencies"
+      - ":robot: bot"
+    commit-message:
+      prefix: ":arrow_up:"
 
   - package-ecosystem: "terraform"
     directory: "/terraform"
     schedule:
       interval: "weekly"
+      day: "saturday"
+      time: "07:00"
+      timezone: "America/Chicago"
+    labels:
+      - ":package: dependencies"
+      - ":robot: bot"
+    commit-message:
+      prefix: ":arrow_up:"
+
+  - package-ecosystem: "nuget"
+    directory: "/windows-api"
+    schedule:
+      interval: "weekly"
+      day: "saturday"
+      time: "07:00"
+      timezone: "America/Chicago"
+    labels:
+      - ":package: dependencies"
+      - ":robot: bot"
+    commit-message:
+      prefix: ":arrow_up:"
