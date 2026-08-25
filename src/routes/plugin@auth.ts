@@ -1,5 +1,6 @@
 import type { RequestHandler } from "@builder.io/qwik-city";
 import { auth } from "~/lib/auth";
+import { ensureDevBootstrap } from "~/lib/dev/bootstrap";
 import type { PortalSession } from "~/lib/types";
 
 /**
@@ -13,6 +14,8 @@ export const onRequest: RequestHandler = async ({
 	sharedMap,
 	next,
 }) => {
+	await ensureDevBootstrap();
+
 	const s = await auth.api.getSession({ headers: request.headers });
 	const session: PortalSession | null = s
 		? {

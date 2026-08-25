@@ -8,4 +8,10 @@ export default defineConfig(() => ({
 	plugins: [qwikCity(), qwikVite(), tsconfigPaths(), tailwindcss()],
 	server: { headers: { "Cache-Control": "public, max-age=0" } },
 	preview: { headers: { "Cache-Control": "public, max-age=600" } },
+	optimizeDeps: {
+		exclude: ["@electric-sql/pglite"],
+	},
+	ssr: {
+		external: ["@electric-sql/pglite"],
+	},
 }));

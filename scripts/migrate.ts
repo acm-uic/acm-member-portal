@@ -1,52 +1,53 @@
 /**
  * Minimal expand-only migration runner (init container / local dev).
- * drizzle-kit's migrator requires meta journals and takes no DB-level lock;
- * this runner tracks applied files and holds a pg advisory lock so concurrent
- * replicas cannot race (rolling-deploy safe). Applies drizzle/*.sql in lexical
- * order, once each. Run: node scripts/migrate.ts  (Node 24+ type-stripping;
- * the only external import is pg).
+ * With DATABASE_URL: connects via pg and applies drizzle/*.sql.
+ * Without DATABASE_URL (non-production): targets the same .data/pglite store
+ * used by `vite --mode ssr` embedded mode.
+ *
+ * Run: node scripts/migrate.ts  (Node 24+ type-stripping)
  */
-import { readdirSync, readFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import pg from "pg";
+import { applySqlMigrations } from "../src/lib/db/migrate.ts";
+import { isEmbeddedDb, pgliteDataDir } from "../src/lib/db/mode.ts";
 
-const { Client } = pg;
-const MIGRATIONS_DIR = new URL("../drizzle/", import.meta.url);
-const LOCK_ID = 727_001;
+if (isEmbeddedDb()) {
+	const { PGlite } = await import("@electric-sql/pglite");
+	const dataDir = pgliteDataDir();
+	mkdirSync(dataDir, { recursive: true });
+	const client = new PGlite(dataDir);
 
-const client = new Client({ connectionString: process.env.DATABASE_URL });
-await client.connect();
-
-await client.query(`CREATE TABLE IF NOT EXISTS "_migrations" (
-  "name" text PRIMARY KEY,
-  "applied_at" timestamptz NOT NULL DEFAULT now()
-)`);
-
-await client.query("SELECT pg_advisory_lock($1)", [LOCK_ID]);
-try {
-	const { rows } = await client.query<{ name: string }>(
-		'SELECT "name" FROM "_migrations"',
-	);
-	const applied = new Set(rows.map((r) => r.name));
-	const files = readdirSync(MIGRATIONS_DIR)
-		.filter((f) => f.endsWith(".sql"))
-		.sort();
-	for (const file of files) {
-		if (applied.has(file)) continue;
-		console.log(`Applying ${file}…`);
-		await client.query("BEGIN");
-		try {
-			await client.query(readFileSync(new URL(file, MIGRATIONS_DIR), "utf8"));
-			await client.query('INSERT INTO "_migrations" ("name") VALUES ($1)', [
-				file,
-			]);
-			await client.query("COMMIT");
-		} catch (err) {
-			await client.query("ROLLBACK");
-			throw err;
+	const query = async (text: string, params?: unknown[]) => {
+		if (params?.length) {
+			const result = await client.query(text, params);
+			return { rows: (result.rows ?? []) as Record<string, unknown>[] };
 		}
+		const results = await client.exec(text);
+		const last = results[results.length - 1] as
+			| { rows?: Record<string, unknown>[] }
+			| undefined;
+		return { rows: last?.rows ?? [] };
+	};
+
+	await applySqlMigrations(query, { useAdvisoryLock: false });
+	await client.close();
+} else {
+	if (!process.env.DATABASE_URL) {
+		console.error("DATABASE_URL is required (or omit it for PGlite local mode)");
+		process.exit(1);
 	}
-	console.log("Migrations up to date.");
-} finally {
-	await client.query("SELECT pg_advisory_unlock($1)", [LOCK_ID]);
-	await client.end();
+
+	const { Client } = pg;
+	const client = new Client({ connectionString: process.env.DATABASE_URL });
+	await client.connect();
+
+	try {
+		await applySqlMigrations((text, params) =>
+			client.query(text, params as never).then((r) => ({
+				rows: r.rows as Record<string, unknown>[],
+			})),
+		);
+	} finally {
+		await client.end();
+	}
 }

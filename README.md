@@ -82,12 +82,25 @@ to the IP-range variant before `kubectl apply`.
 ## Daily development
 
 ```bash
-npm run dev         # vite dev server on :5173
-npm run check       # tsc --noEmit
-npm test            # vitest run
-npm run db:migrate  # apply drizzle/0000_initial.sql (also runs in init container)
+# Zero-config local mode (no Postgres, Entra, SMTP, or Windows API):
+# boots in-process PGlite, seeds officer@localhost / local-dev, stubs mail + AD.
+bun run dev          # or: npm run dev — vite on :5173
+# Reset local DB + stub mail: rm -rf .data
+
+# Against a real Postgres (CloudNativePG-shaped):
+# cp .env.example .env  # set DATABASE_URL + auth secrets
+npm run db:migrate   # apply drizzle/0000_initial.sql (also runs in init container)
+npm run dev
+
+npm run check        # tsc --noEmit
+npm test             # vitest run
 ```
 
+Local credentials (embedded mode only):
+
+- Officer: `officer@local.test` / `local-dev`
+- After approving a signup, the member password is written under `.data/mail/`
+- `DEV_LOGIN=1` enables the same email/password login against a real `DATABASE_URL`
 ## Deploying the Windows API
 
 See `windows-api/README.md`. Briefly: a Windows Server with the RSAT AD PowerShell

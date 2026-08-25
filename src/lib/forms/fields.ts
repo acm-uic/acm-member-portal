@@ -1,6 +1,4 @@
 import { and, desc, eq } from "drizzle-orm";
-import { db } from "~/lib/db";
-import { formSchemas } from "~/lib/db/schema";
 import type { FormFieldDef, FormSchemaDefinition } from "~/lib/types";
 
 /**
@@ -60,6 +58,9 @@ export interface PublishedForm {
 
 /** Latest published signup form — the shape the public route renders. */
 export async function loadPublishedSignupForm(): Promise<PublishedForm> {
+	const { db } = await import("~/lib/db");
+	const { formSchemas } = await import("~/lib/db/schema");
+
 	const [row] = await db
 		.select()
 		.from(formSchemas)
