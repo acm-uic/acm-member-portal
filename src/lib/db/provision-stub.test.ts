@@ -26,6 +26,9 @@ describe("provisioning stub drain", () => {
 		vi.resetModules();
 		delete (globalThis as { __portalDb?: unknown }).__portalDb;
 		delete (globalThis as { __pgliteClient?: unknown }).__pgliteClient;
+		delete (globalThis as { __pgliteBoot?: unknown }).__pgliteBoot;
+		delete (globalThis as { __pgliteShutdownHooked?: unknown })
+			.__pgliteShutdownHooked;
 		delete (globalThis as { __portalEmbedded?: unknown }).__portalEmbedded;
 		delete (globalThis as { __portalDevBootstrapped?: unknown })
 			.__portalDevBootstrapped;
@@ -46,6 +49,9 @@ describe("provisioning stub drain", () => {
 		rmSync(mailDir, { recursive: true, force: true });
 		delete (globalThis as { __portalDb?: unknown }).__portalDb;
 		delete (globalThis as { __pgliteClient?: unknown }).__pgliteClient;
+		delete (globalThis as { __pgliteBoot?: unknown }).__pgliteBoot;
+		delete (globalThis as { __pgliteShutdownHooked?: unknown })
+			.__pgliteShutdownHooked;
 		delete (globalThis as { __portalEmbedded?: unknown }).__portalEmbedded;
 		delete (globalThis as { __portalDevBootstrapped?: unknown })
 			.__portalDevBootstrapped;

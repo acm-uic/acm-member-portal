@@ -14,4 +14,7 @@ export default defineConfig(() => ({
 	ssr: {
 		external: ["@electric-sql/pglite"],
 	},
+	worker: {
+		format: "es" as const,
+	},
 }));

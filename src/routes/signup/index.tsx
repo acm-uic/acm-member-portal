@@ -70,7 +70,7 @@ export default component$(() => {
 			<div class="absolute top-md right-md">
 				<ThemeToggle />
 			</div>
-			<div class="max-w-lg w-full bg-surface1 border border-border rounded-component shadow-card p-xl grid gap-lg">
+			<div class="max-w-lg w-full min-w-0 bg-surface1 border border-border rounded-component shadow-card p-xl grid gap-lg">
 				<header class="grid gap-xs">
 					<h1 class="font-display text-heading m-0">
 						Join <span class="text-accent">ACM</span>@UIC
@@ -84,7 +84,7 @@ export default component$(() => {
 					</p>
 				</header>
 
-				<Form action={action} class="grid gap-md">
+				<Form action={action} class="grid gap-md min-w-0">
 					{form.value.fields.map((field) => (
 						<DynamicField
 							key={field.key}

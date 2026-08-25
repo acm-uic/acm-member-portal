@@ -81,6 +81,35 @@ describe("compileFormSchema", () => {
 		);
 	});
 
+	it("asks for the current year or later when grad_year is too small", () => {
+		const parsed = schema.safeParse({ ...validInput, grad_year: "1" });
+		expect(parsed.success).toBe(false);
+		if (parsed.success) return;
+		const msg = parsed.error.flatten().fieldErrors.grad_year?.[0] ?? "";
+		const year = String(new Date().getFullYear());
+		expect(msg).toContain(year);
+		expect(msg).toMatch(/later year/);
+		expect(msg).not.toMatch(/too small/);
+	});
+
+	it("reports select errors with visible labels, not option values", () => {
+		const parsed = schema.safeParse({ ...validInput, college: "hogwarts" });
+		expect(parsed.success).toBe(false);
+		if (parsed.success) return;
+		const msg = parsed.error.flatten().fieldErrors.college?.[0] ?? "";
+		expect(msg).toContain("College of Engineering");
+		expect(msg).not.toMatch(/"engineering"/);
+	});
+
+	it("coerces a single checkbox value into a multiselect array", () => {
+		const parsed = schema.safeParse({
+			...validInput,
+			sig_interest: "sig-ai",
+		});
+		expect(parsed.success).toBe(true);
+		if (parsed.success) expect(parsed.data.sig_interest).toEqual(["sig-ai"]);
+	});
+
 	it("rejects an invalid email", () => {
 		expect(
 			schema.safeParse({ ...validInput, email: "not-an-email" }).success,
@@ -116,6 +145,29 @@ describe("compileField", () => {
 				order: 1,
 			}),
 		).toThrow(/no options/);
+	});
+
+	it("accepts the select value while naming labels in the error", () => {
+		const yearInSchool = compileField({
+			key: "year_in_school",
+			label: "Year in school",
+			type: "select",
+			required: true,
+			order: 3,
+			options: [
+				{ value: "freshman", label: "Freshman" },
+				{ value: "sophomore", label: "Sophomore" },
+				{ value: "junior", label: "Junior" },
+				{ value: "senior", label: "Senior" },
+				{ value: "grad", label: "Graduate student" },
+			],
+		});
+		expect(yearInSchool.safeParse("grad").success).toBe(true);
+		const bad = yearInSchool.safeParse("Graduate student");
+		expect(bad.success).toBe(false);
+		if (bad.success) return;
+		expect(bad.error.issues[0]?.message).toContain("Graduate student");
+		expect(bad.error.issues[0]?.message).not.toMatch(/"grad"/);
 	});
 });
 

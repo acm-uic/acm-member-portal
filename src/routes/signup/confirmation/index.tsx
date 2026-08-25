@@ -4,7 +4,7 @@ import { Link } from "@builder.io/qwik-city";
 export default component$(() => {
 	return (
 		<main class="min-h-screen grid place-items-center p-xl">
-			<div class="max-w-md w-full bg-surface1 border border-border rounded-component shadow-card p-xl grid gap-md">
+			<div class="max-w-md w-full min-w-0 bg-surface1 border border-border rounded-component shadow-card p-xl grid gap-md">
 				<p class="m-0 inline-flex w-fit px-sm py-2xs rounded-element bg-success-bg text-success text-label">
 					Signup received
 				</p>

@@ -120,6 +120,18 @@
   --radius-component: var(--radius-component);
   --radius-container: var(--radius-container);
   --radius-pill: var(--radius-pill);
+  /* Named --spacing-* tokens win over --container-* for max-w-sm/md/lg. */
+  --max-width-xs: 20rem;
+  --max-width-sm: 24rem;
+  --max-width-md: 28rem;
+  --max-width-lg: 32rem;
+  --max-width-xl: 36rem;
+  --max-width-2xl: 42rem;
+  --max-width-3xl: 48rem;
+  --max-width-4xl: 56rem;
+  --max-width-5xl: 64rem;
+  --max-width-6xl: 72rem;
+  --max-width-7xl: 80rem;
   --shadow-card: var(--shadow-card);
   --shadow-overlay: var(--shadow-overlay);
   --ease-standard: var(--ease-standard);

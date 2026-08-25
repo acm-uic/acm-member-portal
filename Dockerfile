@@ -12,7 +12,7 @@ RUN npm ci
 FROM node:${NODE_VERSION}-alpine AS build
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-RUN npm run build && npm run build.server
+RUN npm run build
 
 # ---- runtime -----------------------------------------------------------
 FROM node:${NODE_VERSION}-alpine AS runtime

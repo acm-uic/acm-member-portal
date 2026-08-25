@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { unionPermissions } from "./index";
+import { unionPermissions } from "./union";
 import { PERMISSION_CATALOG, PERMISSIONS } from "./permissions";
 
 describe("permission catalog", () => {

@@ -10,6 +10,44 @@ function optionValues(field: FormFieldDef): [string, ...string[]] {
 	return values as [string, ...string[]];
 }
 
+/** "Freshman, Sophomore, or Graduate student" — matches visible option labels. */
+function formatOptionLabels(field: FormFieldDef): string {
+	const labels = (field.options ?? []).map((o) => o.label);
+	if (labels.length === 0) return "a listed option";
+	if (labels.length === 1) return labels[0]!;
+	if (labels.length === 2) return `${labels[0]} or ${labels[1]}`;
+	return `${labels.slice(0, -1).join(", ")}, or ${labels[labels.length - 1]}`;
+}
+
+function selectError(field: FormFieldDef) {
+	return (iss: { input: unknown }) => {
+		if (iss.input === undefined || iss.input === "") {
+			return `${field.label} is required`;
+		}
+		return `Choose ${formatOptionLabels(field)}`;
+	};
+}
+
+/** HTML checkboxes post a string when one is checked, an array when several are. */
+function asStringArray(val: unknown): unknown {
+	if (val == null || val === "") return [];
+	return Array.isArray(val) ? val : [val];
+}
+
+function numberMin(field: FormFieldDef): { min: number; message: string } | null {
+	if (field.min === undefined) return null;
+	const currentYear = new Date().getFullYear();
+	const looksLikeYear = field.min >= 1900 && field.min <= currentYear + 80;
+	if (looksLikeYear) {
+		const min = Math.max(field.min, currentYear);
+		return { min, message: `${field.label} must be ${min} or a later year` };
+	}
+	return {
+		min: field.min,
+		message: `${field.label} must be at least ${field.min}`,
+	};
+}
+
 /** Compile one admin-defined field to a Zod schema (Zod v4). */
 export function compileField(field: FormFieldDef): z.ZodTypeAny {
 	switch (field.type) {
@@ -28,21 +66,22 @@ export function compileField(field: FormFieldDef): z.ZodTypeAny {
 		}
 		case "number": {
 			let n = z.coerce.number<number>().int("Enter a whole number");
-			if (field.min !== undefined)
-				n = n.min(field.min, `${field.label} is too small`);
+			const bound = numberMin(field);
+			if (bound) n = n.min(bound.min, bound.message);
 			if (field.max !== undefined)
-				n = n.max(field.max, `${field.label} is too large`);
+				n = n.max(field.max, `${field.label} must be at most ${field.max}`);
 			return field.required ? n : n.optional();
 		}
 		case "select": {
-			const s = z.enum(optionValues(field));
+			const s = z.enum(optionValues(field), { error: selectError(field) });
 			return field.required ? s : s.optional();
 		}
 		case "multiselect": {
-			const s = z.array(z.enum(optionValues(field)));
-			return field.required
-				? s.min(1, `Select at least one option for ${field.label}`)
-				: s.optional();
+			const item = z.enum(optionValues(field), { error: selectError(field) });
+			const arr = field.required
+				? z.array(item).min(1, `Select at least one option for ${field.label}`)
+				: z.array(item);
+			return z.preprocess(asStringArray, arr);
 		}
 		case "checkbox":
 			return z.coerce.boolean();

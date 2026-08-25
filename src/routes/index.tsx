@@ -8,7 +8,7 @@ export default component$(() => {
 			<div class="absolute top-md right-md">
 				<ThemeToggle />
 			</div>
-			<div class="max-w-md w-full bg-surface1 border border-border rounded-component shadow-card p-xl grid gap-md">
+			<div class="max-w-md w-full min-w-0 bg-surface1 border border-border rounded-component shadow-card p-xl grid gap-md">
 				<h1 class="font-display text-heading m-0">
 					<span class="text-accent">ACM</span>@UIC
 				</h1>

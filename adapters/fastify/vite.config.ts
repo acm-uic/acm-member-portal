@@ -7,5 +7,8 @@ export default extendConfig(baseConfig, () => ({
 		ssr: true,
 		rollupOptions: { input: ["src/entry.fastify.tsx", "@qwik-city-plan"] },
 	},
-	plugins: [nodeServerAdapter({ name: "fastify" })],
+	plugins: [
+		// Auth middleware imports the DB; SSG would require DATABASE_URL at build time.
+		nodeServerAdapter({ name: "fastify", ssg: null }),
+	],
 }));

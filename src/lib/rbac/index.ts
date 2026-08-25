@@ -2,6 +2,9 @@ import { eq, sql } from "drizzle-orm";
 import { db, pool } from "~/lib/db";
 import { rolePermissions, userRoles } from "~/lib/db/schema";
 import type { PermissionKey } from "./permissions";
+import { unionPermissions } from "./union";
+
+export { unionPermissions } from "./union";
 
 /**
  * Per-role permission sets, cached in-process. Invalidated two ways:
@@ -54,18 +57,6 @@ async function rolePermissionSets(): Promise<Map<string, Set<PermissionKey>>> {
 	}
 	cache = { at: Date.now(), byRole };
 	return byRole;
-}
-
-/** Pure union — exported for unit tests. */
-export function unionPermissions(
-	memberships: readonly string[],
-	sets: ReadonlyMap<string, Set<PermissionKey>>,
-): Set<PermissionKey> {
-	const out = new Set<PermissionKey>();
-	for (const roleId of memberships) {
-		for (const key of sets.get(roleId) ?? []) out.add(key);
-	}
-	return out;
 }
 
 export async function resolvePermissions(

@@ -89,7 +89,7 @@ export default component$(() => {
 			<div class="absolute top-md right-md">
 				<ThemeToggle />
 			</div>
-			<div class="max-w-md w-full bg-surface1 border border-border rounded-component shadow-card p-xl grid gap-md">
+			<div class="max-w-md w-full min-w-0 bg-surface1 border border-border rounded-component shadow-card p-xl grid gap-md">
 				<h1 class="font-display text-heading m-0">
 					<span class="text-accent">ACM</span>@UIC
 				</h1>
@@ -110,7 +110,7 @@ export default component$(() => {
 									name="email"
 									required
 									defaultValue="officer@local.test"
-									class="px-md py-sm rounded-control bg-surface2 border border-border text-body"
+									class="w-full min-w-0 px-md py-sm rounded-control bg-surface2 border border-border text-body"
 								/>
 							</label>
 							<label class="grid gap-xs">
@@ -120,7 +120,7 @@ export default component$(() => {
 									name="password"
 									required
 									defaultValue="local-dev"
-									class="px-md py-sm rounded-control bg-surface2 border border-border text-body"
+									class="w-full min-w-0 px-md py-sm rounded-control bg-surface2 border border-border text-body"
 								/>
 							</label>
 							{action.value?.ok === false ? (

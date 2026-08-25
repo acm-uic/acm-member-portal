@@ -11,7 +11,7 @@ export const DynamicField = component$<{
 	const text = typeof value === "string" ? value : "";
 	const selected = Array.isArray(value) ? value : [];
 	return (
-		<div class="grid gap-xs">
+		<div class="grid gap-xs min-w-0">
 			<label for={field.key} class="text-label text-text2">
 				{field.label}
 				{field.required && (
@@ -30,7 +30,7 @@ export const DynamicField = component$<{
 					placeholder={field.placeholder}
 					aria-invalid={!!error}
 					aria-describedby={describedBy}
-					class="px-sm py-sm rounded-control bg-surface3 text-text1 border border-border focus:border-border-visible outline-none"
+					class="w-full min-w-0 px-sm py-sm rounded-control bg-surface3 text-text1 border border-border focus:border-border-visible outline-none"
 				>
 					{text}
 				</textarea>
@@ -40,7 +40,7 @@ export const DynamicField = component$<{
 					name={field.key}
 					aria-invalid={!!error}
 					aria-describedby={describedBy}
-					class="px-sm py-sm rounded-control bg-surface3 text-text1 border border-border"
+					class="w-full min-w-0 px-sm py-sm rounded-control bg-surface3 text-text1 border border-border"
 				>
 					<option value="">Select…</option>
 					{(field.options ?? []).map((o) => (
@@ -95,7 +95,7 @@ export const DynamicField = component$<{
 					value={text}
 					aria-invalid={!!error}
 					aria-describedby={describedBy}
-					class="px-sm py-sm rounded-control bg-surface3 text-text1 border border-border focus:border-border-visible outline-none"
+					class="w-full min-w-0 px-sm py-sm rounded-control bg-surface3 text-text1 border border-border focus:border-border-visible outline-none"
 				/>
 			)}
 

@@ -1,3 +1,12 @@
+import {
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	rmSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
+import { resolve as resolvePath } from "node:path";
 import { drizzle as drizzlePg } from "drizzle-orm/node-postgres";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import pg from "pg";
@@ -14,6 +23,8 @@ declare global {
 	var __portalDb: PortalDb | undefined;
 	var __portalEmbedded: boolean | undefined;
 	var __pgliteClient: import("@electric-sql/pglite").PGlite | undefined;
+	var __pgliteBoot: Promise<{ db: PortalDb; pool: PortalPool }> | undefined;
+	var __pgliteShutdownHooked: boolean | undefined;
 }
 
 /**
@@ -36,36 +47,156 @@ function stubPool(): PortalPool {
 	};
 }
 
+function pidAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function isWasmAbort(err: unknown): boolean {
+	return (
+		err instanceof Error &&
+		(err.name === "RuntimeError" || err.message.includes("Aborted()"))
+	);
+}
+
+/** Exclusive create of `.portal.lock`. Recovers a stale PID from a crashed process. */
+function acquirePgliteLock(dataDir: string): string {
+	const lockPath = `${dataDir}/.portal.lock`;
+	mkdirSync(dataDir, { recursive: true });
+	for (let attempt = 0; attempt < 3; attempt++) {
+		try {
+			writeFileSync(lockPath, `${process.pid}\n`, { flag: "wx" });
+			return lockPath;
+		} catch (err) {
+			if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+			let holder = NaN;
+			try {
+				holder = Number(readFileSync(lockPath, "utf8").trim());
+			} catch {
+				continue;
+			}
+			if (
+				Number.isInteger(holder) &&
+				holder !== process.pid &&
+				pidAlive(holder)
+			) {
+				throw new Error(
+					`Embedded PGlite at ${dataDir} is already open in pid ${holder}. Stop the other portal process (another bun/npm run dev), or set PGLITE_DATA_DIR to a different path.`,
+				);
+			}
+			try {
+				unlinkSync(lockPath);
+			} catch {
+				/* raced with another starter */
+			}
+		}
+	}
+	throw new Error(`Could not lock PGlite data dir ${dataDir}`);
+}
+
+function hookPgliteShutdown(
+	client: { close: () => Promise<void> },
+	lockPath: string,
+): void {
+	if (globalThis.__pgliteShutdownHooked) return;
+	globalThis.__pgliteShutdownHooked = true;
+	const release = () => {
+		try {
+			if (existsSync(lockPath)) unlinkSync(lockPath);
+		} catch {
+			/* already released */
+		}
+		void client.close().catch(() => {});
+	};
+	process.once("exit", release);
+	process.once("SIGINT", release);
+	process.once("SIGTERM", release);
+}
+
+async function openPglite(
+	PGlite: typeof import("@electric-sql/pglite").PGlite,
+	dataDir: string,
+): Promise<import("@electric-sql/pglite").PGlite> {
+	try {
+		return await PGlite.create(dataDir);
+	} catch (err) {
+		if (!isWasmAbort(err)) throw err;
+		if (typeof process.exitCode === "number") process.exitCode = 0;
+		console.warn(
+			`[db] PGlite could not open ${dataDir} (corrupt after a crash). Recreating.`,
+		);
+		rmSync(dataDir, { recursive: true, force: true });
+		acquirePgliteLock(dataDir);
+		return await PGlite.create(dataDir);
+	}
+}
+
 async function initEmbedded(): Promise<{ db: PortalDb; pool: PortalPool }> {
+	if (globalThis.__pgliteClient && globalThis.__portalDb) {
+		return { db: globalThis.__portalDb, pool: stubPool() };
+	}
+
 	const { PGlite } = await import("@electric-sql/pglite");
 	const { drizzle } = await import("drizzle-orm/pglite");
-	const { mkdirSync } = await import("node:fs");
 	const { applySqlMigrations } = await import("./migrate");
 
-	const dataDir = pgliteDataDir();
-	mkdirSync(dataDir, { recursive: true });
+	const useMemory = Boolean(process.env.VITEST) && !process.env.PGLITE_DATA_DIR;
+	const dataDir = useMemory ? "memory://" : resolvePath(pgliteDataDir());
+	const lockPath = useMemory ? null : acquirePgliteLock(dataDir);
 
-	const client = globalThis.__pgliteClient ?? new PGlite(dataDir);
-	globalThis.__pgliteClient = client;
+	let client: import("@electric-sql/pglite").PGlite;
+	try {
+		client = useMemory
+			? await PGlite.create("memory://")
+			: await openPglite(PGlite, dataDir);
 
-	const query = async (text: string, params?: unknown[]) => {
-		if (params?.length) {
-			const result = await client.query(text, params);
-			return { rows: (result.rows ?? []) as Record<string, unknown>[] };
+		globalThis.__pgliteClient = client;
+		if (lockPath) hookPgliteShutdown(client, lockPath);
+
+		const query = async (text: string, params?: unknown[]) => {
+			if (params?.length) {
+				const result = await client.query(text, params);
+				return { rows: (result.rows ?? []) as Record<string, unknown>[] };
+			}
+			const results = await client.exec(text);
+			const last = results[results.length - 1] as
+				| { rows?: Record<string, unknown>[] }
+				| undefined;
+			return { rows: last?.rows ?? [] };
+		};
+
+		await applySqlMigrations(query, { useAdvisoryLock: false });
+
+		return {
+			db: drizzle(client, { schema }) as unknown as PortalDb,
+			pool: stubPool(),
+		};
+	} catch (err) {
+		await globalThis.__pgliteClient?.close().catch(() => {});
+		globalThis.__pgliteClient = undefined;
+		if (lockPath) {
+			try {
+				if (existsSync(lockPath)) unlinkSync(lockPath);
+			} catch {
+				/* ignore */
+			}
 		}
-		const results = await client.exec(text);
-		const last = results[results.length - 1] as
-			| { rows?: Record<string, unknown>[] }
-			| undefined;
-		return { rows: last?.rows ?? [] };
-	};
+		throw err;
+	}
+}
 
-	await applySqlMigrations(query, { useAdvisoryLock: false });
-
-	return {
-		db: drizzle(client, { schema }) as unknown as PortalDb,
-		pool: stubPool(),
-	};
+function bootEmbedded(): Promise<{ db: PortalDb; pool: PortalPool }> {
+	if (!globalThis.__pgliteBoot) {
+		globalThis.__pgliteBoot = initEmbedded().catch((err) => {
+			globalThis.__pgliteBoot = undefined;
+			throw err;
+		});
+	}
+	return globalThis.__pgliteBoot;
 }
 
 function initPg(): { db: PortalDb; pool: PortalPool } {
@@ -102,7 +233,7 @@ const boot =
 					: (globalThis.__portalPool as unknown as PortalPool),
 			}
 		: embedded
-			? await initEmbedded()
+			? await bootEmbedded()
 			: initPg();
 
 globalThis.__portalDb = boot.db;
