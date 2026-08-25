@@ -1,0 +1,34 @@
+":memo: documentation":
+  - any:
+      - changed-files:
+          - any-glob-to-any-file:
+              - README.md
+              - windows-api/README.md
+              - CODE_OF_CONDUCT.md
+              - .github/CONTRIBUTING.md
+              - .github/pull_request_template.md
+              - .github/ISSUE_TEMPLATE/**/*
+":taco: app":
+  - any:
+      - changed-files:
+          - any-glob-to-any-file:
+              - src/**/*
+              - adapters/**/*
+              - scripts/**/*
+              - drizzle/**/*
+              - windows-api/**/*
+              - Dockerfile
+              - ./*.ts
+              - ./*.json
+":bricks: infra":
+  - any:
+      - changed-files:
+          - any-glob-to-any-file:
+              - k8s/**/*
+              - helm/**/*
+              - terraform/**/*
+":construction: actions":
+  - any:
+      - changed-files:
+          - any-glob-to-any-file:
+              - .github/workflows/**/*

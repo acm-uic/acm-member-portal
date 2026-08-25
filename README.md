@@ -132,6 +132,10 @@ See `windows-api/README.md`. Briefly: a Windows Server with the RSAT AD PowerShe
 module, a `.NET 8` runtime, a service account delegated `Create/delete user objects`
 on the Members OU, and the same `WINDOWS_API_TOKEN` value as the k8s Secret.
 
+## Contributing
+
+Check out the [contributing guide](.github/CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md).
+
 ## Verification checklist (initial deploy)
 
 - [ ] `terraform apply` exits 0; `output client_id` is non-empty
