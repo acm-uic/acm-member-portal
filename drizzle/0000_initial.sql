@@ -229,14 +229,27 @@ INSERT INTO "form_schemas" ("form_key", "version", "status", "season", "fields",
       {"value":"sophomore","label":"Sophomore"},
       {"value":"junior","label":"Junior"},
       {"value":"senior","label":"Senior"},
-      {"value":"grad","label":"Graduate student"}]},
+      {"value":"grad","label":"Graduate student"},
+      {"value":"alumni","label":"Alum"},
+      {"value":"faculty","label":"Faculty"}
+      ]},
     {"key":"grad_year","label":"Expected graduation year","type":"number","required":true,"order":4,"min":2024,"max":2040},
     {"key":"sig_interest","label":"Interest in SIGs","type":"multiselect","required":false,"order":5,"options":[
-      {"value":"sig-systems","label":"SIG Systems"},
       {"value":"sig-ai","label":"SIG AI"},
+      {"value":"sig-algotrading","label":"SIG Algorithmic Trading"},
+      {"value":"sig-cybersecurity","label":"SIG Cybersecurity"},
+      {"value":"sig-game","label":"SIG Game"},
+      {"value":"sig-hacks","label":"SIG Hacks"},
+      {"value":"sig-indiedev","label":"SIG Indie Dev"},
       {"value":"sig-jobs","label":"SIG Jobs"},
-      {"value":"open-source","label":"Open Source"}]},
-    {"key":"internships","label":"How many internships do you have?","type":"number","required":true,"order":6,"min":0,"max":20}
+      {"value":"sig-math","label":"SIG Math"},
+      {"value":"sig-mobiledev","label":"SIG Mobile Development"},
+      {"value":"sig-pcbuild","label":"SIG PC Build"},
+      {"value":"sig-sysadmin","label":"SIG SysAdmin"},
+      {"value":"sig-systems","label":"SIG Systems"},
+      {"value":"sig-virtualreality","label":"SIG Virtual Reality"},
+      {"value":"sig-webdev","label":"SIG WebDev"}]},
+    {"key":"internships","label":"How many internships have you had?","type":"number","required":true,"order":6,"min":0,"max":100}
   ]}'::jsonb,
   now()
 )
