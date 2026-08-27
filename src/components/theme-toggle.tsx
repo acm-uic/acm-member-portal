@@ -1,7 +1,7 @@
 import { $, component$, useSignal, useVisibleTask$ } from "@builder.io/qwik";
 import type { ThemeMode } from "~/lib/types";
 
-export const ThemeToggle = component$(() => {
+export const ThemeToggle = component$<{ class?: string }>((props) => {
 	const theme = useSignal<ThemeMode>("dark");
 
 	useVisibleTask$(() => {
@@ -25,7 +25,7 @@ export const ThemeToggle = component$(() => {
 			type="button"
 			aria-label="Toggle color theme"
 			onClick$={toggle}
-			class="h-8 px-md rounded-pill bg-surface3 text-text3 hover:text-text1 transition-colors duration-fast ease-standard text-label"
+			class={`h-8 px-md rounded-pill bg-surface3 text-text3 hover:text-text1 transition-colors duration-fast ease-standard text-label whitespace-nowrap inline-flex items-center justify-center ${props.class ?? ""}`}
 		>
 			{theme.value === "dark" ? "☾ Dark" : "☀ Light"}
 		</button>

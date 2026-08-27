@@ -23,7 +23,7 @@ const ADMIN_NAV_ITEMS = [
 	{ href: "/dashboard/admin/roles", label: "Roles", icon: "icon-shield" },
 	{
 		href: "/dashboard/admin/forms",
-		label: "Forms",
+		label: "Signup Forms",
 		icon: "icon-clipboard-list",
 	},
 	{ href: "/dashboard/admin/content", label: "Content", icon: "icon-file-text" },
@@ -54,7 +54,7 @@ function navClass(active: boolean) {
 }
 
 /** Archetype sidebar (app-screen.html): 220px, wordmark, nav with 3px accent
-    active border, profile + theme toggle pinned to the bottom. */
+    active border, theme toggle stacked above profile at the bottom. */
 export const Sidebar = component$<{
 	userName: string;
 	userStatus: string;
@@ -108,7 +108,8 @@ export const Sidebar = component$<{
 					</>
 				)}
 			</nav>
-			<div class="mt-auto pt-md border-t border-border flex items-center justify-between gap-sm px-sm">
+			<div class="mt-auto pt-md border-t border-border flex flex-col gap-sm px-sm">
+				<ThemeToggle class="w-full" />
 				<div class="flex items-center gap-sm min-w-0">
 					<div class="w-[34px] h-[34px] shrink-0 grid place-items-center rounded-pill bg-surface3 text-caption">
 						{initials}
@@ -122,7 +123,6 @@ export const Sidebar = component$<{
 						</span>
 					</div>
 				</div>
-				<ThemeToggle />
 			</div>
 		</aside>
 	);
