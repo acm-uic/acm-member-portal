@@ -10,8 +10,8 @@ import { randomBytes } from "node:crypto";
 /**
  * Drain one provisioning event. Returns false when the queue is empty
  * (caller backs off). Idempotency lives API-side: the Windows API keys on
- * sAMAccountName (netid) and returns existed:true on replay; in that case
- * no password is returned and no email is sent.
+ * sAMAccountName (signup username) and returns existed:true on replay; in that
+ * case no password is returned and no email is sent.
  *
  * When WINDOWS_API_URL is unset, stubs AD creation locally (dev / PGlite).
  */
@@ -35,6 +35,7 @@ export async function drainOnce(
 	try {
 		const payload = event.payload as {
 			netid: string;
+			username?: string;
 			firstName: string;
 			lastName: string;
 			preferredName?: string;
@@ -45,15 +46,16 @@ export async function drainOnce(
 			company?: string;
 			eventId: string;
 		};
+		const username = payload.username || payload.netid;
 
 		const body = process.env.WINDOWS_API_URL
-			? await callWindowsApi(payload, fetchImpl)
-			: stubProvision(payload);
+			? await callWindowsApi({ ...payload, username }, fetchImpl)
+			: stubProvision({ username });
 
 		if (body.oneTimePassword) {
 			await sendCredentialEmail({
 				to: payload.email,
-				netid: body.samAccountName,
+				username: body.samAccountName,
 				oneTimePassword: body.oneTimePassword,
 			});
 
@@ -65,6 +67,11 @@ export async function drainOnce(
 					name: payload.displayName,
 					password: body.oneTimePassword,
 					netid: payload.netid,
+					username,
+					uin: payload.uin,
+					firstName: payload.firstName,
+					lastName: payload.lastName,
+					preferredName: payload.preferredName,
 				});
 			}
 		}
@@ -81,17 +88,17 @@ export async function drainOnce(
 	return true;
 }
 
-function stubProvision(payload: { netid: string }): {
+function stubProvision(payload: { username: string }): {
 	samAccountName: string;
 	existed: boolean;
 	oneTimePassword: string;
 } {
 	const oneTimePassword = `dev-${randomBytes(6).toString("hex")}`;
 	console.log(
-		`[provision stub] created ${payload.netid} (OTP written via mail stub)`,
+		`[provision stub] created ${payload.username} (OTP written via mail stub)`,
 	);
 	return {
-		samAccountName: payload.netid,
+		samAccountName: payload.username,
 		existed: false,
 		oneTimePassword,
 	};
@@ -102,6 +109,11 @@ async function seedLocalMemberLogin(args: {
 	name: string;
 	password: string;
 	netid: string;
+	username: string;
+	uin?: string;
+	firstName: string;
+	lastName: string;
+	preferredName?: string;
 }): Promise<void> {
 	try {
 		const { auth } = await import("../lib/auth");
@@ -122,17 +134,34 @@ async function seedLocalMemberLogin(args: {
 				password: args.password,
 				name: args.name,
 				netid: args.netid,
+				username: args.username,
+				uin: args.uin,
+				firstName: args.firstName,
+				lastName: args.lastName,
+				preferredName: args.preferredName,
 			} as {
 				email: string;
 				password: string;
 				name: string;
 				netid: string;
+				username: string;
+				uin?: string;
+				firstName: string;
+				lastName: string;
+				preferredName?: string;
 			},
 		});
 		if (result?.user) {
 			await db
 				.update(user)
-				.set({ netid: args.netid })
+				.set({
+					netid: args.netid,
+					username: args.username,
+					uin: args.uin ?? null,
+					firstName: args.firstName,
+					lastName: args.lastName,
+					preferredName: args.preferredName ?? null,
+				})
 				.where(eq(user.id, result.user.id));
 			console.log(
 				`[dev] local member login: ${args.email} (password in .data/mail/)`,
@@ -146,6 +175,7 @@ async function seedLocalMemberLogin(args: {
 async function callWindowsApi(
 	payload: {
 		netid: string;
+		username: string;
 		firstName: string;
 		lastName: string;
 		preferredName?: string;

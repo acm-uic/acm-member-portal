@@ -42,7 +42,7 @@ export async function runAlumniDigest(): Promise<void> {
 			"",
 			...lines,
 			"",
-			"Review and approve the transitions at https://portal.acm-uic.org/admin/alumni",
+			"Review and approve the transitions at https://portal.acm-uic.org/dashboard/admin/alumni",
 			"",
 			"— ACM@UIC member portal",
 		].join("\n"),

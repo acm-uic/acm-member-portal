@@ -6,7 +6,7 @@ import { sendMail } from "./smtp";
  */
 export async function sendCredentialEmail(args: {
 	to: string;
-	netid: string;
+	username: string;
 	oneTimePassword: string;
 }): Promise<void> {
 	await sendMail({
@@ -17,7 +17,7 @@ export async function sendCredentialEmail(args: {
 			``,
 			`Your ACM@UIC membership has been approved and your account is ready.`,
 			``,
-			`  Username: ${args.netid}`,
+			`  Username: ${args.username}`,
 			`  One-time password: ${args.oneTimePassword}`,
 			``,
 			`Sign in at https://portal.acm-uic.org with "Sign in with Microsoft".`,

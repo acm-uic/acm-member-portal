@@ -15,7 +15,22 @@ public record CreateUserRequest(
     string EventId,
     string? PreferredName = null,
     string? Department = null,
-    string? Company = null);
+    string? Company = null,
+    string? Username = null)
+{
+    public string AccountName =>
+        string.IsNullOrWhiteSpace(Username) ? Netid : Username!.Trim();
+}
+
+public record UpdateUserRequest(
+    string? Username,
+    string? FirstName,
+    string? LastName,
+    string? DisplayName,
+    string? Email,
+    string? Uin,
+    string? PreferredName);
+
 public record CreateUserResponse(string SamAccountName, bool Existed, string? OneTimePassword);
 
 public class ProvisioningException(string message) : Exception(message);
@@ -52,13 +67,13 @@ public sealed class AdProvisioningService
         return ps;
     }
 
-    public async Task<bool> UserExistsAsync(string netid)
+    public async Task<bool> UserExistsAsync(string samAccountName)
     {
         using var ps = CreateShell(out var runspace);
         using (runspace)
         {
             ps.AddCommand("Get-ADUser")
-              .AddParameter("Filter", $"sAMAccountName -eq '{netid.Replace("'", "''")}'")
+              .AddParameter("Filter", $"sAMAccountName -eq '{samAccountName.Replace("'", "''")}'")
               .AddParameter("Properties", "sAMAccountName");
             if (HasExplicitDc) ps.AddParameter("Server", _domainController);
 
@@ -69,9 +84,10 @@ public sealed class AdProvisioningService
 
     public async Task<CreateUserResponse> CreateUserAsync(CreateUserRequest req)
     {
-        if (await UserExistsAsync(req.Netid))
+        var accountName = req.AccountName;
+        if (await UserExistsAsync(accountName))
         {
-            return new CreateUserResponse(req.Netid, true, null);
+            return new CreateUserResponse(accountName, true, null);
         }
 
         var password = GeneratePassword();
@@ -82,6 +98,7 @@ public sealed class AdProvisioningService
             // Name/CN: "First Last" (matches manual New-ADUser)
             // DisplayName: preferred name when set, else "First Last"
             // GivenName/Surname: legal first/last
+            // sAMAccountName / UserPrincipalName: signup Username
             // EmployeeID: UIN; Department: major; Company: college
             var legalName = $"{req.FirstName} {req.LastName}".Trim();
             ps.AddCommand("New-ADUser")
@@ -89,8 +106,8 @@ public sealed class AdProvisioningService
               .AddParameter("DisplayName", req.DisplayName)
               .AddParameter("GivenName", req.FirstName)
               .AddParameter("Surname", req.LastName)
-              .AddParameter("SamAccountName", req.Netid)
-              .AddParameter("UserPrincipalName", $"{req.Netid}@{_upnSuffix}")
+              .AddParameter("SamAccountName", accountName)
+              .AddParameter("UserPrincipalName", $"{accountName}@{_upnSuffix}")
               .AddParameter("EmailAddress", req.Email)
               .AddParameter("AccountPassword", ToSecureString(password))
               .AddParameter("Enabled", true)
@@ -108,14 +125,58 @@ public sealed class AdProvisioningService
                 var errors = string.Join("; ", ps.Streams.Error.Select(e => e.ToString()));
                 // A create that lost the race (or a replay after a crash between
                 // create and response) is still idempotent success.
-                if (await UserExistsAsync(req.Netid))
+                if (await UserExistsAsync(accountName))
                 {
-                    return new CreateUserResponse(req.Netid, true, null);
+                    return new CreateUserResponse(accountName, true, null);
                 }
                 throw new ProvisioningException($"New-ADUser failed: {errors}");
             }
 
-            return new CreateUserResponse(req.Netid, false, password);
+            return new CreateUserResponse(accountName, false, password);
+        }
+    }
+
+    public async Task<CreateUserResponse> UpdateUserAsync(string currentSam, UpdateUserRequest req)
+    {
+        if (!await UserExistsAsync(currentSam))
+        {
+            throw new ProvisioningException($"AD user '{currentSam}' was not found.");
+        }
+
+        var newSam = string.IsNullOrWhiteSpace(req.Username)
+            ? currentSam
+            : req.Username!.Trim();
+
+        using var ps = CreateShell(out var runspace);
+        using (runspace)
+        {
+            ps.AddCommand("Set-ADUser")
+              .AddParameter("Identity", currentSam);
+            if (!string.IsNullOrWhiteSpace(req.FirstName)) ps.AddParameter("GivenName", req.FirstName);
+            if (!string.IsNullOrWhiteSpace(req.LastName)) ps.AddParameter("Surname", req.LastName);
+            if (!string.IsNullOrWhiteSpace(req.DisplayName)) ps.AddParameter("DisplayName", req.DisplayName);
+            if (!string.IsNullOrWhiteSpace(req.Email)) ps.AddParameter("EmailAddress", req.Email);
+            if (!string.IsNullOrWhiteSpace(req.Uin)) ps.AddParameter("EmployeeID", req.Uin);
+            if (!string.Equals(newSam, currentSam, StringComparison.OrdinalIgnoreCase))
+            {
+                ps.AddParameter("SamAccountName", newSam);
+                ps.AddParameter("UserPrincipalName", $"{newSam}@{_upnSuffix}");
+            }
+            else
+            {
+                ps.AddParameter("UserPrincipalName", $"{currentSam}@{_upnSuffix}");
+            }
+            if (HasExplicitDc) ps.AddParameter("Server", _domainController);
+
+            await ps.InvokeAsync();
+
+            if (ps.HadErrors)
+            {
+                var errors = string.Join("; ", ps.Streams.Error.Select(e => e.ToString()));
+                throw new ProvisioningException($"Set-ADUser failed: {errors}");
+            }
+
+            return new CreateUserResponse(newSam, true, null);
         }
     }
 

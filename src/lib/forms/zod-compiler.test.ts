@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { compileField, compileFormSchema, splitAnswers } from "./zod-compiler";
+import { compileField, compileFormSchema, splitAnswers, changedFields } from "./zod-compiler";
 import { BASE_FIELDS } from "./fields";
 import type { FormFieldDef } from "~/lib/types";
 
@@ -66,6 +66,7 @@ const validInput = {
 	last_name: "Morgan",
 	preferred_name: "",
 	netid: "amorga42",
+	username: "amorga",
 	uin: "678901234",
 	email: "alex@example.com",
 	major: "Computer Science",
@@ -184,6 +185,46 @@ describe("compileFormSchema", () => {
 			schema.safeParse({ ...validInput, major: "x".repeat(121) }).success,
 		).toBe(false);
 	});
+
+	it("rejects a username with non-alphanumeric characters", () => {
+		expect(
+			schema.safeParse({ ...validInput, username: "alex_morgan" }).success,
+		).toBe(false);
+	});
+
+	it("rejects a username longer than 64 characters", () => {
+		expect(
+			schema.safeParse({ ...validInput, username: "a".repeat(65) }).success,
+		).toBe(false);
+	});
+
+	it("accepts a 64-character alphanumeric username", () => {
+		expect(
+			schema.safeParse({ ...validInput, username: "a".repeat(64) }).success,
+		).toBe(true);
+	});
+
+	it("rejects a missing username", () => {
+		const { username: _omit, ...rest } = validInput;
+		expect(schema.safeParse(rest).success).toBe(false);
+	});
+});
+
+describe("changedFields", () => {
+	it("ignores empty-to-empty differences", () => {
+		expect(
+			changedFields(
+				{ preferred_name: "", sig_interest: [] },
+				{ preferred_name: null, sig_interest: undefined },
+			),
+		).toEqual([]);
+	});
+
+	it("records a real identity change", () => {
+		expect(changedFields({ uin: null }, { uin: "111222333" })).toEqual([
+			{ field: "uin", oldValue: null, newValue: "111222333" },
+		]);
+	});
 });
 
 describe("compileField", () => {
@@ -232,6 +273,7 @@ describe("splitAnswers", () => {
 			last_name: "Morgan",
 			preferred_name: "",
 			netid: "amorga42",
+			username: "amorga",
 			uin: "678901234",
 			email: "alex@example.com",
 		});

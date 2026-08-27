@@ -43,7 +43,7 @@ async function seedOfficer(): Promise<void> {
 
 	// Ensure netid is set for the officer (email prefix)
 	await db.execute(
-		sql`UPDATE "user" SET netid = 'officer' WHERE id = ${result.user.id} AND netid IS NULL`,
+		sql`UPDATE "user" SET netid = 'officer', username = COALESCE(username, 'officer') WHERE id = ${result.user.id}`,
 	);
 
 	console.log(

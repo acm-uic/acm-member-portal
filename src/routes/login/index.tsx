@@ -10,6 +10,7 @@ import {
 import { ThemeToggle } from "~/components/theme-toggle";
 import { auth, microsoftConfigured } from "~/lib/auth";
 import { isDevLoginEnabled } from "~/lib/db/mode";
+import { resolveDevLoginEmail } from "~/lib/dev/login-identifier";
 
 export const useLoginOptions = routeLoader$(() => ({
 	devLogin: isDevLoginEnabled(),
@@ -34,11 +35,18 @@ export const useDevLogin = routeAction$(
 			return { ok: false as const, error: "Dev login is disabled." };
 		}
 		const next = String(data.next || "/dashboard");
+		const email = await resolveDevLoginEmail(data.login);
+		if (!email) {
+			return {
+				ok: false as const,
+				error: "Invalid email, username, or password.",
+			};
+		}
 		let res: Response;
 		try {
 			res = await auth.api.signInEmail({
 				body: {
-					email: data.email,
+					email,
 					password: data.password,
 				},
 				headers: event.request.headers,
@@ -57,7 +65,7 @@ export const useDevLogin = routeAction$(
 			} | null;
 			return {
 				ok: false as const,
-				error: body?.message ?? "Invalid email or password.",
+				error: body?.message ?? "Invalid email, username, or password.",
 			};
 		}
 
@@ -65,7 +73,7 @@ export const useDevLogin = routeAction$(
 		throw event.redirect(303, next.startsWith("/") ? next : "/dashboard");
 	},
 	zod$({
-		email: z.string().email(),
+		login: z.string().trim().min(1).max(254),
 		password: z.string().min(1),
 		next: z.string().optional(),
 	}),
@@ -101,18 +109,21 @@ export default component$(() => {
 					<>
 						<p class="text-text2 text-body m-0">
 							Local development login. Seeded officer:{" "}
+							<code class="text-label">officer</code> or{" "}
 							<code class="text-label">officer@local.test</code> /{" "}
 							<code class="text-label">local-dev</code>. Not Entra or real AD.
 						</p>
 						<Form action={action} class="grid gap-md">
 							<input type="hidden" name="next" value={next} />
 							<label class="grid gap-xs">
-								<span class="text-label text-text2">Email</span>
+								<span class="text-label text-text2">Email or username</span>
 								<input
-									type="email"
-									name="email"
+									type="text"
+									name="login"
+									autocomplete="username"
 									required
-									defaultValue="officer@local.test"
+									maxLength={254}
+									defaultValue="officer"
 									class="w-full min-w-0 px-md py-sm rounded-control bg-surface2 border border-border text-body"
 								/>
 							</label>

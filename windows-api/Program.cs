@@ -11,11 +11,12 @@ app.MapGet("/healthz", () => Results.Ok(new { status = "ok" }));
 
 app.MapPost("/users", async Task<IResult> (CreateUserRequest req, AdProvisioningService ad) =>
 {
-    if (string.IsNullOrWhiteSpace(req.Netid) || string.IsNullOrWhiteSpace(req.FirstName)
+    var accountName = req.AccountName;
+    if (string.IsNullOrWhiteSpace(accountName) || string.IsNullOrWhiteSpace(req.FirstName)
         || string.IsNullOrWhiteSpace(req.LastName) || string.IsNullOrWhiteSpace(req.DisplayName)
         || string.IsNullOrWhiteSpace(req.Email) || string.IsNullOrWhiteSpace(req.EventId))
     {
-        return Results.BadRequest(new { error = "netid, firstName, lastName, displayName, email, and eventId are required." });
+        return Results.BadRequest(new { error = "username (or netid), firstName, lastName, displayName, email, and eventId are required." });
     }
 
     try
@@ -29,12 +30,34 @@ app.MapPost("/users", async Task<IResult> (CreateUserRequest req, AdProvisioning
     }
 });
 
-app.MapGet("/users/{netid}", async Task<IResult> (string netid, AdProvisioningService ad) =>
+app.MapPatch("/users/{sam}", async Task<IResult> (string sam, UpdateUserRequest req, AdProvisioningService ad) =>
 {
-    var exists = await ad.UserExistsAsync(netid);
+    if (string.IsNullOrWhiteSpace(sam))
+    {
+        return Results.BadRequest(new { error = "sAMAccountName is required." });
+    }
+
+    try
+    {
+        var result = await ad.UpdateUserAsync(sam, req);
+        return Results.Ok(result);
+    }
+    catch (ProvisioningException ex) when (ex.Message.Contains("was not found", StringComparison.Ordinal))
+    {
+        return Results.NotFound(new { samAccountName = sam, existed = false });
+    }
+    catch (ProvisioningException ex)
+    {
+        return Results.Problem(ex.Message, statusCode: 502);
+    }
+});
+
+app.MapGet("/users/{sam}", async Task<IResult> (string sam, AdProvisioningService ad) =>
+{
+    var exists = await ad.UserExistsAsync(sam);
     return exists
-        ? Results.Ok(new { samAccountName = netid, existed = true })
-        : Results.NotFound(new { samAccountName = netid, existed = false });
+        ? Results.Ok(new { samAccountName = sam, existed = true })
+        : Results.NotFound(new { samAccountName = sam, existed = false });
 });
 
 app.Run();

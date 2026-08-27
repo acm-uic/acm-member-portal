@@ -1,6 +1,10 @@
 import { z } from "zod";
 import type { FormFieldDef } from "~/lib/types";
-import { BASE_FIELD_KEYS, type BaseFieldKey } from "./fields";
+import {
+	BASE_FIELD_KEYS,
+	USERNAME_PATTERN,
+	type BaseFieldKey,
+} from "./fields";
 
 /** Campus emails rejected for the personal-email field. */
 const CAMPUS_EMAIL_SUFFIXES = ["uic.edu", "uiuc.edu", "illinois.edu"] as const;
@@ -57,6 +61,12 @@ export function compileField(field: FormFieldDef): z.ZodTypeAny {
 				s = s.regex(
 					/^\d{9,}$/,
 					`${field.label} must be at least 9 digits (leading zeros are fine)`,
+				);
+			}
+			if (field.key === "username") {
+				s = s.regex(
+					USERNAME_PATTERN,
+					`${field.label} can only contain letters and numbers`,
 				);
 			}
 			if (field.minLength !== undefined)
@@ -146,4 +156,94 @@ export function splitAnswers(data: Record<string, unknown>): {
 		}
 	}
 	return { base, answers };
+}
+
+export function flattenFieldErrors(
+	flat: Record<string, string[] | undefined>,
+): Record<string, string> {
+	const errors: Record<string, string> = {};
+	for (const [key, msgs] of Object.entries(flat)) {
+		if (msgs?.length) errors[key] = msgs[0]!;
+	}
+	return errors;
+}
+
+/** Posted form values used to rehydrate inputs after a failed submit. */
+export function postedValues(
+	data: Record<string, unknown>,
+): Record<string, string | string[]> {
+	const values: Record<string, string | string[]> = {};
+	for (const [key, value] of Object.entries(data)) {
+		if (typeof value === "string") values[key] = value;
+		else if (Array.isArray(value)) values[key] = value.map(String);
+		else if (typeof value === "number" || typeof value === "boolean")
+			values[key] = String(value);
+	}
+	return values;
+}
+
+/** Read a form element into the shape `compileFormSchema` expects. */
+export function valuesFromFormElement(
+	form: HTMLFormElement,
+	fields: FormFieldDef[],
+): Record<string, unknown> {
+	const fd = new FormData(form);
+	const data: Record<string, unknown> = {};
+	for (const field of fields) {
+		if (field.type === "multiselect") {
+			data[field.key] = fd.getAll(field.key).map(String);
+		} else if (field.type === "checkbox") {
+			data[field.key] = fd.get(field.key) != null;
+		} else {
+			data[field.key] = String(fd.get(field.key) ?? "");
+		}
+	}
+	return data;
+}
+
+/** Client-side mirror of server `compileFormSchema` field errors. */
+export function clientFieldErrors(
+	fields: FormFieldDef[],
+	data: Record<string, unknown>,
+): Record<string, string> {
+	const parsed = compileFormSchema(fields).safeParse(data);
+	if (parsed.success) return {};
+	return flattenFieldErrors(parsed.error.flatten().fieldErrors);
+}
+
+/** Snapshot of identity + dynamic answers for profile audit diffs. */
+export function profileSnapshot(data: Record<string, unknown>): Record<
+	string,
+	unknown
+> {
+	const out: Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(data)) {
+		if (value === undefined) continue;
+		out[key] = value;
+	}
+	return out;
+}
+
+function isEmptyValue(value: unknown): boolean {
+	if (value == null || value === "") return true;
+	if (Array.isArray(value) && value.length === 0) return true;
+	return false;
+}
+
+export function changedFields(
+	before: Record<string, unknown>,
+	after: Record<string, unknown>,
+): { field: string; oldValue: unknown; newValue: unknown }[] {
+	const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+	const changes: { field: string; oldValue: unknown; newValue: unknown }[] =
+		[];
+	for (const key of keys) {
+		const oldValue = before[key] ?? null;
+		const newValue = after[key] ?? null;
+		if (isEmptyValue(oldValue) && isEmptyValue(newValue)) continue;
+		if (JSON.stringify(oldValue) !== JSON.stringify(newValue)) {
+			changes.push({ field: key, oldValue, newValue });
+		}
+	}
+	return changes;
 }

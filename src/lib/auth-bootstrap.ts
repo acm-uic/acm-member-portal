@@ -5,8 +5,10 @@ import {
 	memberProfiles,
 	provisioningEvents,
 	signupSubmissions,
+	user,
 	userRoles,
 } from "~/lib/db/schema";
+import { formatSignupDisplayName } from "~/lib/forms/fields";
 
 /** Serializes concurrent first logins (distinct from migrate.ts's lock id). */
 const BOOTSTRAP_LOCK_ID = 727_002;
@@ -87,6 +89,24 @@ export async function bootstrapUser(u: {
 				} else if (event?.status === "dead_lettered") {
 					adProvisioningStatus = "failed";
 				}
+
+				const displayName = formatSignupDisplayName({
+					firstName: submission.firstName,
+					lastName: submission.lastName,
+					preferredName: submission.preferredName,
+				});
+				await tx
+					.update(user)
+					.set({
+						uin: submission.uin,
+						username: submission.username,
+						firstName: submission.firstName,
+						lastName: submission.lastName,
+						preferredName: submission.preferredName,
+						displayName,
+						name: displayName,
+					})
+					.where(eq(user.id, u.id));
 			}
 		}
 

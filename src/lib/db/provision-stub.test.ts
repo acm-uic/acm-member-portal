@@ -80,6 +80,7 @@ describe("provisioning stub drain", () => {
 				lastName: "User",
 				preferredName: null,
 				netid: "tuser",
+				username: "tuser",
 				uin: "123456789",
 				email: "tuser@example.com",
 				answers: { major: "Computer Science", college: "engineering" },
@@ -93,6 +94,7 @@ describe("provisioning stub drain", () => {
 			submissionId: submission!.id,
 			payload: {
 				netid: "tuser",
+				username: "tuser",
 				firstName: "Test",
 				lastName: "User",
 				displayName: "Test User",

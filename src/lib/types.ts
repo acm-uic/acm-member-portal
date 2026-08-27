@@ -48,6 +48,7 @@ export interface SessionUser {
 	name: string;
 	email: string;
 	netid: string | null;
+	username: string | null;
 	entraOid: string | null;
 }
 
@@ -61,6 +62,8 @@ export interface PortalSession {
 
 export interface ProvisioningApiCreateRequest {
 	netid: string;
+	/** ACM account name → AD sAMAccountName and the local part of UserPrincipalName. */
+	username: string;
 	firstName: string;
 	lastName: string;
 	/** Preferred name when set; omitted when blank. */
@@ -76,6 +79,18 @@ export interface ProvisioningApiCreateRequest {
 	company?: string;
 	/** Outbox event UUID — correlation only; not written to AD. */
 	eventId: string;
+}
+
+export interface ProvisioningApiUpdateRequest {
+	/** Current sAMAccountName, used to find the AD object. */
+	samAccountName: string;
+	username?: string;
+	firstName?: string;
+	lastName?: string;
+	preferredName?: string;
+	displayName?: string;
+	email?: string;
+	uin?: string;
 }
 
 export interface ProvisioningApiCreateResponse {

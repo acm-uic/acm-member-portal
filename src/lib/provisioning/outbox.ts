@@ -30,6 +30,7 @@ export async function enqueueProvisioning(
 				typeof answers.college === "string" ? answers.college : undefined;
 			return {
 				netid: submission.netid,
+				username: submission.username || submission.netid,
 				firstName: submission.firstName,
 				lastName: submission.lastName,
 				preferredName: submission.preferredName?.trim() || undefined,

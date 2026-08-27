@@ -31,7 +31,11 @@ export const user = pgTable("user", {
 		.defaultNow(),
 	/* additionalFields — see src/lib/auth.ts user.additionalFields */
 	netid: text("netid").unique(),
+	username: text("username").unique(),
 	uin: text("uin"),
+	firstName: text("first_name"),
+	lastName: text("last_name"),
+	preferredName: text("preferred_name"),
 	displayName: text("display_name"),
 	entraOid: text("entra_oid"),
 });
@@ -159,6 +163,7 @@ export const signupSubmissions = pgTable(
 		lastName: text("last_name").notNull(),
 		preferredName: text("preferred_name"),
 		netid: text("netid").notNull(),
+		username: text("username").notNull(),
 		uin: text("uin"),
 		email: text("email").notNull(),
 		answers: jsonb("answers").notNull(),
@@ -244,18 +249,22 @@ export const contentItems = pgTable(
 	(t) => [index("content_items_type_status_idx").on(t.type, t.status)],
 );
 
-export const auditEvents = pgTable("audit_events", {
-	id: bigserial("id", { mode: "number" }).primaryKey(),
-	actorId: text("actor_id").references(() => user.id),
-	action: text("action").notNull(),
-	targetType: text("target_type").notNull(),
-	targetId: text("target_id"),
-	before: jsonb("before"),
-	after: jsonb("after"),
-	createdAt: timestamp("created_at", { withTimezone: true })
-		.notNull()
-		.defaultNow(),
-});
+export const auditEvents = pgTable(
+	"audit_events",
+	{
+		id: bigserial("id", { mode: "number" }).primaryKey(),
+		actorId: text("actor_id").references(() => user.id),
+		action: text("action").notNull(),
+		targetType: text("target_type").notNull(),
+		targetId: text("target_id"),
+		before: jsonb("before"),
+		after: jsonb("after"),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(t) => [index("audit_events_target_idx").on(t.targetType, t.targetId)],
+);
 
 export const provisioningEvents = pgTable(
 	"provisioning_events",

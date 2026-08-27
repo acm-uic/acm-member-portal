@@ -1,12 +1,19 @@
-import { component$ } from "@builder.io/qwik";
-import { Form, routeAction$, routeLoader$ } from "@builder.io/qwik-city";
+import { $, component$, useSignal } from "@builder.io/qwik";
+import { routeAction$, routeLoader$ } from "@builder.io/qwik-city";
 import { and, eq } from "drizzle-orm";
 import { DynamicField } from "~/components/forms/dynamic-field";
-import { db } from "~/lib/db";
-import { signupSubmissions } from "~/lib/db/schema";
-import { loadPublishedSignupForm } from "~/lib/forms/fields";
-import { compileFormSchema, splitAnswers } from "~/lib/forms/zod-compiler";
 import { ThemeToggle } from "~/components/theme-toggle";
+import { db } from "~/lib/db";
+import { signupSubmissions, user } from "~/lib/db/schema";
+import { loadPublishedSignupForm } from "~/lib/forms/fields";
+import {
+	clientFieldErrors,
+	compileFormSchema,
+	flattenFieldErrors,
+	postedValues,
+	splitAnswers,
+	valuesFromFormElement,
+} from "~/lib/forms/zod-compiler";
 
 /**
  * PUBLIC route — no session check (FR1/FR2: accounts do not exist until
@@ -18,44 +25,20 @@ export const useSignupForm = routeLoader$(async () => {
 	return { season: form.season, fields: form.fields };
 });
 
-function fieldErrors(
-	flat: Record<string, string[] | undefined>,
-): Record<string, string> {
-	const errors: Record<string, string> = {};
-	for (const [key, msgs] of Object.entries(flat)) {
-		if (msgs?.length) errors[key] = msgs[0]!;
-	}
-	return errors;
-}
-
-/** Keep posted strings/arrays so the form can rehydrate after a validation error. */
-function postedValues(
-	data: Record<string, unknown>,
-): Record<string, string | string[]> {
-	const values: Record<string, string | string[]> = {};
-	for (const [key, value] of Object.entries(data)) {
-		if (typeof value === "string") values[key] = value;
-		else if (Array.isArray(value)) values[key] = value.map(String);
-		else if (typeof value === "number" || typeof value === "boolean")
-			values[key] = String(value);
-	}
-	return values;
-}
-
 export const useSubmitSignup = routeAction$(async (data, event) => {
 	const form = await loadPublishedSignupForm();
 	const parsed = compileFormSchema(form.fields).safeParse(data);
 	if (!parsed.success) {
 		return {
 			ok: false as const,
-			errors: fieldErrors(parsed.error.flatten().fieldErrors),
+			errors: flattenFieldErrors(parsed.error.flatten().fieldErrors),
 			values: postedValues(data),
 		};
 	}
 
 	const { base, answers } = splitAnswers(parsed.data);
 
-	const [pendingDupe] = await db
+	const [pendingNetid] = await db
 		.select({ id: signupSubmissions.id })
 		.from(signupSubmissions)
 		.where(
@@ -65,10 +48,43 @@ export const useSubmitSignup = routeAction$(async (data, event) => {
 			),
 		)
 		.limit(1);
-	if (pendingDupe) {
+	if (pendingNetid) {
 		return {
 			ok: false as const,
 			errors: { netid: "A signup with this NetID is already pending review." },
+			values: postedValues(data),
+		};
+	}
+
+	const [pendingUsername] = await db
+		.select({ id: signupSubmissions.id })
+		.from(signupSubmissions)
+		.where(
+			and(
+				eq(signupSubmissions.username, base.username),
+				eq(signupSubmissions.status, "pending"),
+			),
+		)
+		.limit(1);
+	if (pendingUsername) {
+		return {
+			ok: false as const,
+			errors: {
+				username: "A signup with this username is already pending review.",
+			},
+			values: postedValues(data),
+		};
+	}
+
+	const [takenUsername] = await db
+		.select({ id: user.id })
+		.from(user)
+		.where(eq(user.username, base.username))
+		.limit(1);
+	if (takenUsername) {
+		return {
+			ok: false as const,
+			errors: { username: "This username is already in use." },
 			values: postedValues(data),
 		};
 	}
@@ -80,6 +96,7 @@ export const useSubmitSignup = routeAction$(async (data, event) => {
 		lastName: base.last_name,
 		preferredName: preferred,
 		netid: base.netid,
+		username: base.username,
 		uin: base.uin,
 		email: base.email,
 		answers,
@@ -91,6 +108,21 @@ export const useSubmitSignup = routeAction$(async (data, event) => {
 export default component$(() => {
 	const form = useSignupForm();
 	const action = useSubmitSignup();
+	const clientErrors = useSignal<Record<string, string>>({});
+
+	const onSubmit$ = $(async (event: Event) => {
+		const el = event.target as HTMLFormElement;
+		const values = valuesFromFormElement(el, form.value.fields);
+		const errors = clientFieldErrors(form.value.fields, values);
+		clientErrors.value = errors;
+		if (Object.keys(errors).length) return;
+		await action.submit(new FormData(el));
+	});
+
+	const values =
+		action.value?.ok === false ? action.value.values : undefined;
+	const serverErrors =
+		action.value?.ok === false ? action.value.errors : undefined;
 
 	return (
 		<main class="min-h-screen grid place-items-center p-xl">
@@ -111,21 +143,18 @@ export default component$(() => {
 					</p>
 				</header>
 
-				<Form action={action} class="grid gap-md min-w-0">
+				<form
+					preventdefault:submit
+					onSubmit$={onSubmit$}
+					class="grid gap-md min-w-0"
+					noValidate
+				>
 					{form.value.fields.map((field) => (
 						<DynamicField
 							key={field.key}
 							field={field}
-							value={
-								action.value?.ok === false
-									? action.value.values[field.key]
-									: undefined
-							}
-							error={
-								action.value?.ok === false
-									? action.value.errors[field.key]
-									: undefined
-							}
+							value={values?.[field.key]}
+							error={serverErrors?.[field.key] ?? clientErrors.value[field.key]}
 						/>
 					))}
 					<button
@@ -134,7 +163,7 @@ export default component$(() => {
 					>
 						Submit signup
 					</button>
-				</Form>
+				</form>
 			</div>
 		</main>
 	);

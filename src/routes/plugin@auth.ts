@@ -24,6 +24,7 @@ export const onRequest: RequestHandler = async ({
 					name: s.user.name,
 					email: s.user.email,
 					netid: (s.user as { netid?: string | null }).netid ?? null,
+					username: (s.user as { username?: string | null }).username ?? null,
 					entraOid: (s.user as { entraOid?: string | null }).entraOid ?? null,
 				},
 				sessionId: s.session.id,

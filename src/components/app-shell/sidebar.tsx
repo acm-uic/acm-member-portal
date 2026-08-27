@@ -4,10 +4,54 @@ import { ThemeToggle } from "~/components/theme-toggle";
 
 const NAV_ITEMS = [
 	{ href: "/dashboard", label: "Overview", icon: "icon-layout-dashboard" },
-	{ href: "/announcements", label: "Announcements", icon: "icon-megaphone" },
-	{ href: "/resources", label: "Resources", icon: "icon-book-open" },
-	{ href: "/profile", label: "Profile", icon: "icon-user" },
+	{
+		href: "/dashboard/announcements",
+		label: "Announcements",
+		icon: "icon-megaphone",
+	},
+	{ href: "/dashboard/resources", label: "Resources", icon: "icon-book-open" },
+	{ href: "/dashboard/profile", label: "Profile", icon: "icon-user" },
 ] as const;
+
+const ADMIN_NAV_ITEMS = [
+	{
+		href: "/dashboard/admin/signups",
+		label: "Signups",
+		icon: "icon-user-plus",
+	},
+	{ href: "/dashboard/admin/members", label: "Members", icon: "icon-users" },
+	{ href: "/dashboard/admin/roles", label: "Roles", icon: "icon-shield" },
+	{
+		href: "/dashboard/admin/forms",
+		label: "Forms",
+		icon: "icon-clipboard-list",
+	},
+	{ href: "/dashboard/admin/content", label: "Content", icon: "icon-file-text" },
+	{
+		href: "/dashboard/admin/alumni",
+		label: "Alumni",
+		icon: "icon-graduation-cap",
+	},
+] as const;
+
+function navPath(pathname: string) {
+	return pathname.replace(/\/+$/, "") || "/";
+}
+
+function isNavActive(pathname: string, href: string) {
+	const path = navPath(pathname);
+	const target = navPath(href);
+	if (target === "/dashboard") return path === "/dashboard";
+	return path === target || path.startsWith(`${target}/`);
+}
+
+function navClass(active: boolean) {
+	return `flex items-center gap-sm h-[32px] px-sm rounded-control text-body-sm leading-none no-underline border-l-[3px] ${
+		active
+			? "bg-accent-subtle text-text1 border-accent"
+			: "text-text2 border-transparent"
+	}`;
+}
 
 /** Archetype sidebar (app-screen.html): 220px, wordmark, nav with 3px accent
     active border, profile + theme toggle pinned to the bottom. */
@@ -25,40 +69,43 @@ export const Sidebar = component$<{
 		.toUpperCase();
 
 	return (
-		<aside class="w-[220px] shrink-0 min-h-screen flex flex-col px-sm py-lg border-r border-border bg-surface1">
+		<aside class="w-[220px] shrink-0 self-start sticky top-0 h-screen flex flex-col px-sm py-lg border-r border-border bg-surface1">
 			<div class="px-sm pb-lg font-display text-subheading font-bold">
 				<span class="text-accent">ACM</span>@UIC
 			</div>
-			<nav class="grid gap-2xs">
-				{NAV_ITEMS.map((item) => {
-					const active = loc.url.pathname.startsWith(item.href);
-					return (
-						<Link
-							key={item.href}
-							href={item.href}
-							class={`flex items-center gap-sm px-sm py-sm rounded-control text-body-sm no-underline border-l-[3px] ${
-								active
-									? "bg-accent-subtle text-text1 border-accent"
-									: "text-text2 border-transparent"
-							}`}
-						>
-							<i class={`icon ${item.icon}`} aria-hidden="true" />
-							<span>{item.label}</span>
-						</Link>
-					);
-				})}
-				{props.isAdmin && (
+			<nav class="grid gap-2xs content-start">
+				{NAV_ITEMS.map((item) => (
 					<Link
-						href="/admin/signups"
-						class={`flex items-center gap-sm px-sm py-sm rounded-control text-body-sm no-underline border-l-[3px] ${
-							loc.url.pathname.startsWith("/admin")
-								? "bg-accent-subtle text-text1 border-accent"
-								: "text-text2 border-transparent"
-						}`}
+						key={item.href}
+						href={item.href}
+						class={navClass(isNavActive(loc.url.pathname, item.href))}
 					>
-						<i class="icon icon-settings" aria-hidden="true" />
-						<span>Admin</span>
+						<i
+							class={`icon ${item.icon} w-[14px] h-[14px] shrink-0 leading-none not-italic`}
+							aria-hidden="true"
+						/>
+						<span>{item.label}</span>
 					</Link>
+				))}
+				{props.isAdmin && (
+					<>
+						<p class="m-0 mt-md px-sm pt-sm text-caption text-text3 uppercase tracking-wider leading-none">
+							Admin
+						</p>
+						{ADMIN_NAV_ITEMS.map((item) => (
+							<Link
+								key={item.href}
+								href={item.href}
+								class={navClass(isNavActive(loc.url.pathname, item.href))}
+							>
+								<i
+									class={`icon ${item.icon} w-[14px] h-[14px] shrink-0 leading-none not-italic`}
+									aria-hidden="true"
+								/>
+								<span>{item.label}</span>
+							</Link>
+						))}
+					</>
 				)}
 			</nav>
 			<div class="mt-auto pt-md border-t border-border flex items-center justify-between gap-sm px-sm">

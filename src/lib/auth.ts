@@ -50,7 +50,11 @@ export const auth = betterAuth({
 	user: {
 		additionalFields: {
 			netid: { type: "string", required: false },
+			username: { type: "string", required: false },
 			uin: { type: "string", required: false },
+			firstName: { type: "string", required: false },
+			lastName: { type: "string", required: false },
+			preferredName: { type: "string", required: false },
 			displayName: { type: "string", required: false },
 			entraOid: { type: "string", required: false },
 		},

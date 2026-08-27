@@ -11,10 +11,15 @@ export const BASE_FIELD_KEYS = [
 	"last_name",
 	"preferred_name",
 	"netid",
+	"username",
 	"uin",
 	"email",
 ] as const;
 export type BaseFieldKey = (typeof BASE_FIELD_KEYS)[number];
+
+export const USERNAME_MAX_LENGTH = 64;
+/** Allows empty so the required check can fire first; non-empty must be alphanumeric. */
+export const USERNAME_PATTERN = /^[a-zA-Z0-9]*$/;
 
 export const BASE_FIELDS: FormFieldDef[] = [
 	{
@@ -22,7 +27,7 @@ export const BASE_FIELDS: FormFieldDef[] = [
 		label: "First name",
 		type: "text",
 		required: true,
-		order: -6,
+		order: -7,
 		maxLength: 60,
 	},
 	{
@@ -30,7 +35,7 @@ export const BASE_FIELDS: FormFieldDef[] = [
 		label: "Last name",
 		type: "text",
 		required: true,
-		order: -5,
+		order: -6,
 		maxLength: 60,
 	},
 	{
@@ -38,7 +43,7 @@ export const BASE_FIELDS: FormFieldDef[] = [
 		label: "Preferred name",
 		type: "text",
 		required: false,
-		order: -4,
+		order: -5,
 		maxLength: 60,
 		helpText: "What should we call you? Leave blank to use your first name.",
 	},
@@ -47,8 +52,18 @@ export const BASE_FIELDS: FormFieldDef[] = [
 		label: "NetID",
 		type: "text",
 		required: true,
-		order: -3,
+		order: -4,
 		maxLength: 32,
+	},
+	{
+		key: "username",
+		label: "Username",
+		type: "text",
+		required: true,
+		order: -3,
+		maxLength: USERNAME_MAX_LENGTH,
+		helpText:
+			"Letters and numbers only, up to 64 characters. This becomes your ACM account name.",
 	},
 	{
 		key: "uin",

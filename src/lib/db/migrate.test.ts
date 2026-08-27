@@ -67,7 +67,12 @@ describe("applySqlMigrations (PGlite)", () => {
 
 		const cols = await signupNameColumns(query);
 		expect(cols).toEqual(
-			expect.arrayContaining(["first_name", "last_name", "preferred_name"]),
+			expect.arrayContaining([
+				"first_name",
+				"last_name",
+				"preferred_name",
+				"username",
+			]),
 		);
 		expect(cols).not.toContain("display_name");
 
