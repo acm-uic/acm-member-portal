@@ -25,9 +25,10 @@ export const useDashboard = routeLoader$(async (event) => {
 	]);
 
 	const cookieValue = event.cookie.get(DASHBOARD_VIEW_COOKIE)?.value;
+	const queryView = event.url.searchParams.get("view");
 	const { view, canPreview, isPreview } = resolveDashboardView(
 		roleKeys,
-		cookieValue,
+		queryView ?? cookieValue,
 	);
 
 	const displayName = session.user.name;

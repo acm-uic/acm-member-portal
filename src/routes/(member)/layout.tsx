@@ -41,7 +41,11 @@ export const useShellData = routeLoader$(async (event) => {
 	]);
 	const profile = profileRows[0];
 	const cookieValue = event.cookie.get(DASHBOARD_VIEW_COOKIE)?.value;
-	const { view, canPreview } = resolveDashboardView(roleKeys, cookieValue);
+	const queryView = event.url.searchParams.get("view");
+	const { view, canPreview } = resolveDashboardView(
+		roleKeys,
+		queryView ?? cookieValue,
+	);
 
 	return {
 		userName: session.user.name,
@@ -71,7 +75,7 @@ export const useSetDashboardView = routeAction$(
 			httpOnly: false,
 			secure: process.env.NODE_ENV === "production",
 		});
-		throw event.redirect(303, "/dashboard");
+		throw event.redirect(303, `/dashboard?view=${encodeURIComponent(data.view)}`);
 	},
 	zod$({
 		view: z.string(),
