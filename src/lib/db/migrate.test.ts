@@ -5,20 +5,32 @@ import { afterEach, describe, expect, it } from "vitest";
 import { PGlite } from "@electric-sql/pglite";
 import { applySqlMigrations } from "./migrate";
 
+function pgliteQuery(client: PGlite) {
+	return async (text: string, params?: unknown[]) => {
+		if (params?.length) {
+			const result = await client.query(text, params);
+			return { rows: (result.rows ?? []) as Record<string, unknown>[] };
+		}
+		const results = await client.exec(text);
+		const last = results[results.length - 1] as
+			| { rows?: Record<string, unknown>[] }
+			| undefined;
+		return { rows: last?.rows ?? [] };
+	};
+}
+
+async function signupNameColumns(query: ReturnType<typeof pgliteQuery>) {
+	const { rows } = await query(
+		`SELECT column_name FROM information_schema.columns
+     WHERE table_name = 'signup_submissions' ORDER BY ordinal_position`,
+	);
+	return rows.map((r) => String(r.column_name));
+}
+
 describe("applySqlMigrations (PGlite)", () => {
 	it("applies 0000_initial.sql and seeds the published signup form", async () => {
 		const client = new PGlite();
-		const query = async (text: string, params?: unknown[]) => {
-			if (params?.length) {
-				const result = await client.query(text, params);
-				return { rows: (result.rows ?? []) as Record<string, unknown>[] };
-			}
-			const results = await client.exec(text);
-			const last = results[results.length - 1] as
-				| { rows?: Record<string, unknown>[] }
-				| undefined;
-			return { rows: last?.rows ?? [] };
-		};
+		const query = pgliteQuery(client);
 
 		await applySqlMigrations(query, { useAdvisoryLock: false });
 
@@ -52,6 +64,67 @@ describe("applySqlMigrations (PGlite)", () => {
 				"honors",
 			]),
 		);
+
+		const cols = await signupNameColumns(query);
+		expect(cols).toEqual(
+			expect.arrayContaining(["first_name", "last_name", "preferred_name"]),
+		);
+		expect(cols).not.toContain("display_name");
+
+		await client.close();
+	});
+
+	it("splits legacy signup display_name into first/last/preferred", async () => {
+		const client = new PGlite();
+		const query = pgliteQuery(client);
+
+		await query(`CREATE TABLE IF NOT EXISTS "_migrations" (
+      "name" text PRIMARY KEY,
+      "applied_at" timestamptz NOT NULL DEFAULT now()
+    )`);
+		await query(`CREATE TABLE "signup_submissions" (
+      "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      "schema_version_id" uuid NOT NULL,
+      "display_name" text NOT NULL,
+      "netid" text NOT NULL,
+      "uin" text,
+      "email" text NOT NULL,
+      "answers" jsonb NOT NULL,
+      "status" text NOT NULL DEFAULT 'pending',
+      "created_at" timestamptz NOT NULL DEFAULT now()
+    )`);
+		await query(
+			`INSERT INTO "signup_submissions"
+        ("schema_version_id", "display_name", "netid", "email", "answers")
+       VALUES ($1, $2, $3, $4, $5::jsonb)`,
+			[
+				"00000000-0000-0000-0000-000000000001",
+				"Alex Morgan",
+				"amorga42",
+				"alex@example.com",
+				"{}",
+			],
+		);
+		await query('INSERT INTO "_migrations" ("name") VALUES ($1)', [
+			"0000_initial.sql",
+		]);
+
+		await applySqlMigrations(query, { useAdvisoryLock: false });
+
+		const cols = await signupNameColumns(query);
+		expect(cols).toEqual(
+			expect.arrayContaining(["first_name", "last_name", "preferred_name"]),
+		);
+		expect(cols).not.toContain("display_name");
+
+		const { rows } = await query(
+			`SELECT first_name, last_name, preferred_name FROM signup_submissions`,
+		);
+		expect(rows[0]).toEqual({
+			first_name: "Alex",
+			last_name: "Morgan",
+			preferred_name: null,
+		});
 
 		await client.close();
 	});

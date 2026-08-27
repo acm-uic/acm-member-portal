@@ -18,16 +18,39 @@ export const useSignupForm = routeLoader$(async () => {
 	return { season: form.season, fields: form.fields };
 });
 
+function fieldErrors(
+	flat: Record<string, string[] | undefined>,
+): Record<string, string> {
+	const errors: Record<string, string> = {};
+	for (const [key, msgs] of Object.entries(flat)) {
+		if (msgs?.length) errors[key] = msgs[0]!;
+	}
+	return errors;
+}
+
+/** Keep posted strings/arrays so the form can rehydrate after a validation error. */
+function postedValues(
+	data: Record<string, unknown>,
+): Record<string, string | string[]> {
+	const values: Record<string, string | string[]> = {};
+	for (const [key, value] of Object.entries(data)) {
+		if (typeof value === "string") values[key] = value;
+		else if (Array.isArray(value)) values[key] = value.map(String);
+		else if (typeof value === "number" || typeof value === "boolean")
+			values[key] = String(value);
+	}
+	return values;
+}
+
 export const useSubmitSignup = routeAction$(async (data, event) => {
 	const form = await loadPublishedSignupForm();
 	const parsed = compileFormSchema(form.fields).safeParse(data);
 	if (!parsed.success) {
-		const flat = parsed.error.flatten().fieldErrors;
-		const errors: Record<string, string> = {};
-		for (const [key, msgs] of Object.entries(flat)) {
-			if (msgs?.length) errors[key] = msgs[0];
-		}
-		return { ok: false as const, errors };
+		return {
+			ok: false as const,
+			errors: fieldErrors(parsed.error.flatten().fieldErrors),
+			values: postedValues(data),
+		};
 	}
 
 	const { base, answers } = splitAnswers(parsed.data);
@@ -46,6 +69,7 @@ export const useSubmitSignup = routeAction$(async (data, event) => {
 		return {
 			ok: false as const,
 			errors: { netid: "A signup with this NetID is already pending review." },
+			values: postedValues(data),
 		};
 	}
 
@@ -92,6 +116,11 @@ export default component$(() => {
 						<DynamicField
 							key={field.key}
 							field={field}
+							value={
+								action.value?.ok === false
+									? action.value.values[field.key]
+									: undefined
+							}
 							error={
 								action.value?.ok === false
 									? action.value.errors[field.key]

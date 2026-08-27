@@ -4,12 +4,17 @@ import type { FormFieldDef } from "~/lib/types";
 export const DynamicField = component$<{
 	field: FormFieldDef;
 	error?: string;
-	/** Pre-fill (profile edit). Signup omits it. (Added in Phase 8.) */
+	/** Prefill, or posted values after a failed submit. Omit for a blank field. */
 	value?: string | string[];
 }>(({ field, error, value }) => {
 	const describedBy = error ? `${field.key}-error` : undefined;
+	const hasValue = value !== undefined;
 	const text = typeof value === "string" ? value : "";
-	const selected = Array.isArray(value) ? value : [];
+	const selected = Array.isArray(value)
+		? value
+		: typeof value === "string" && value !== ""
+			? [value]
+			: [];
 	return (
 		<div class="grid gap-xs min-w-0">
 			<label for={field.key} class="text-label text-text2">
@@ -30,21 +35,21 @@ export const DynamicField = component$<{
 					placeholder={field.placeholder}
 					aria-invalid={!!error}
 					aria-describedby={describedBy}
+					value={hasValue ? text : undefined}
 					class="w-full min-w-0 px-sm py-sm rounded-control bg-surface3 text-text1 border border-border focus:border-border-visible outline-none"
-				>
-					{text}
-				</textarea>
+				/>
 			) : field.type === "select" ? (
 				<select
 					id={field.key}
 					name={field.key}
 					aria-invalid={!!error}
 					aria-describedby={describedBy}
+					value={hasValue ? text : undefined}
 					class="w-full min-w-0 px-sm py-sm rounded-control bg-surface3 text-text1 border border-border"
 				>
 					<option value="">Select…</option>
 					{(field.options ?? []).map((o) => (
-						<option key={o.value} value={o.value} selected={text === o.value}>
+						<option key={o.value} value={o.value}>
 							{o.label}
 						</option>
 					))}
@@ -61,7 +66,7 @@ export const DynamicField = component$<{
 								type="checkbox"
 								name={field.key}
 								value={o.value}
-								checked={selected.includes(o.value)}
+								checked={hasValue ? selected.includes(o.value) : undefined}
 								class="accent-accent"
 							/>
 							{o.label}
@@ -74,7 +79,7 @@ export const DynamicField = component$<{
 					name={field.key}
 					type="checkbox"
 					value="true"
-					checked={text === "true"}
+					checked={hasValue ? text === "true" : undefined}
 					aria-invalid={!!error}
 					class="accent-accent h-4 w-4"
 				/>
@@ -93,7 +98,7 @@ export const DynamicField = component$<{
 					placeholder={field.placeholder}
 					minLength={field.minLength}
 					maxLength={field.maxLength}
-					value={text}
+					value={hasValue ? text : undefined}
 					aria-invalid={!!error}
 					aria-describedby={describedBy}
 					class="w-full min-w-0 px-sm py-sm rounded-control bg-surface3 text-text1 border border-border focus:border-border-visible outline-none"

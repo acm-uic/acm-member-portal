@@ -16,14 +16,27 @@ export const useLoginOptions = routeLoader$(() => ({
 	microsoft: microsoftConfigured,
 }));
 
+/** Better Auth sets several cookies; Qwik's Node adapter only emits the cookie jar as multiple Set-Cookie lines. */
+function applyAuthCookies(
+	event: { cookie: { set: (name: string, value: string) => void } },
+	response: Response,
+): void {
+	for (const ck of response.headers.getSetCookie()) {
+		const eq = ck.indexOf("=");
+		if (eq === -1) continue;
+		event.cookie.set(ck.slice(0, eq).trim(), ck.slice(eq + 1).trim());
+	}
+}
+
 export const useDevLogin = routeAction$(
 	async (data, event) => {
 		if (!isDevLoginEnabled()) {
 			return { ok: false as const, error: "Dev login is disabled." };
 		}
 		const next = String(data.next || "/dashboard");
+		let res: Response;
 		try {
-			const res = await auth.api.signInEmail({
+			res = await auth.api.signInEmail({
 				body: {
 					email: data.email,
 					password: data.password,
@@ -31,35 +44,25 @@ export const useDevLogin = routeAction$(
 				headers: event.request.headers,
 				asResponse: true,
 			});
-
-			if (!res.ok) {
-				const body = (await res.json().catch(() => null)) as {
-					message?: string;
-				} | null;
-				return {
-					ok: false as const,
-					error: body?.message ?? "Invalid email or password.",
-				};
-			}
-
-			const setCookie = res.headers.getSetCookie?.() ?? [];
-			for (const cookie of setCookie) {
-				event.headers.append("set-cookie", cookie);
-			}
-			// Fallback for runtimes without getSetCookie
-			if (setCookie.length === 0) {
-				const single = res.headers.get("set-cookie");
-				if (single) event.headers.append("set-cookie", single);
-			}
-
-			throw event.redirect(303, next.startsWith("/") ? next : "/dashboard");
 		} catch (err) {
-			if (err && typeof err === "object" && "status" in err) throw err;
 			return {
 				ok: false as const,
 				error: err instanceof Error ? err.message : "Sign-in failed.",
 			};
 		}
+
+		if (!res.ok) {
+			const body = (await res.json().catch(() => null)) as {
+				message?: string;
+			} | null;
+			return {
+				ok: false as const,
+				error: body?.message ?? "Invalid email or password.",
+			};
+		}
+
+		applyAuthCookies(event, res);
+		throw event.redirect(303, next.startsWith("/") ? next : "/dashboard");
 	},
 	zod$({
 		email: z.string().email(),
