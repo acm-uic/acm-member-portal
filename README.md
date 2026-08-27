@@ -131,6 +131,46 @@ Local credentials (embedded mode only):
 - After approving a signup, the member password is written under `.data/mail/`
 - `DEV_LOGIN=1` enables the same email/password login against a real `DATABASE_URL`
 
+### Local Discord linking
+
+The Discord buttons stay hidden until `DISCORD_CLIENT_ID` and
+`DISCORD_CLIENT_SECRET` are set. Vite loads `.env` from the repo root
+(gitignored). Leave `DATABASE_URL` unset if you still want PGlite. Copying
+`.env.example` as-is fills `DATABASE_URL` and the app will try Postgres on
+localhost instead.
+
+```bash
+# Only the Discord bits. No DATABASE_URL.
+cat >> .env <<'EOF'
+DISCORD_CLIENT_ID=your_app_id
+DISCORD_CLIENT_SECRET=your_app_secret
+DISCORD_GUILD_ID=your_server_snowflake
+ORIGIN=http://localhost:5173
+BETTER_AUTH_URL=http://localhost:5173
+EOF
+```
+
+Restart the dev server after changing `.env`. `src/lib/auth.ts` reads
+`DISCORD_*` at load time.
+
+Create an application at [discord.com/developers/applications](https://discord.com/developers/applications).
+A throwaway local app is fine. You do not need the production ACM app, a bot
+token, or a bot install.
+
+1. OAuth2 → copy Client ID and Client Secret into the env vars above.
+2. Add both redirect URIs, exactly:
+   - `http://localhost:5173/api/auth/callback/discord` (profile link)
+   - `http://localhost:5173/signup/discord/callback` (signup link)
+
+`DISCORD_GUILD_ID` is the server snowflake. It only decides whether to show
+the join CTA (https://acm.cs.uic.edu/discord). Enable Developer Mode in Discord
+(User Settings → Advanced), then right-click the server → Copy Server ID. A
+personal test server you can join and leave is easier than hitting ACM@UIC from
+localhost.
+
+After restart, `/signup` shows Link Discord, and a logged-in member sees it on
+`/dashboard/profile`.
+
 ## Deploying the Windows API
 
 See `windows-api/README.md`. Briefly: a Windows Server with the RSAT AD PowerShell

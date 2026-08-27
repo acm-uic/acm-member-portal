@@ -1,4 +1,4 @@
-import { $, component$, useSignal } from "@builder.io/qwik";
+import { $, component$, useSignal, useVisibleTask$ } from "@builder.io/qwik";
 import { routeAction$, routeLoader$ } from "@builder.io/qwik-city";
 import { and, eq } from "drizzle-orm";
 import { DiscordJoinCta } from "~/components/discord/join-cta";
@@ -14,6 +14,11 @@ import {
 } from "~/lib/discord";
 import { discordIdTaken, discordTakenMessage } from "~/lib/discord-link";
 import { loadPublishedSignupForm } from "~/lib/forms/fields";
+import type { FormFieldDef } from "~/lib/types";
+import {
+  loadSignupDraft,
+  saveSignupDraft,
+} from "~/lib/signup-draft";
 import {
   clientFieldErrors,
   compileFormSchema,
@@ -170,11 +175,24 @@ export const useSubmitSignup = routeAction$(async (data, event) => {
   throw event.redirect(303, `/signup/confirmation${qs ? `?${qs}` : ""}`);
 });
 
+function snapshotSignupForm(fields: FormFieldDef[]): void {
+  const el = document.getElementById("signup-form") as HTMLFormElement | null;
+  if (!el) return;
+  saveSignupDraft(valuesFromFormElement(el, fields));
+}
+
 export default component$(() => {
   const form = useSignupForm();
   const action = useSubmitSignup();
   const clearDiscord = useClearSignupDiscord();
   const clientErrors = useSignal<Record<string, string>>({});
+  const draft = useSignal<Record<string, string | string[]> | undefined>(
+    undefined,
+  );
+
+  useVisibleTask$(() => {
+    draft.value = loadSignupDraft() ?? undefined;
+  });
 
   const onSubmit$ = $(async (event: Event) => {
     const el = event.target as HTMLFormElement;
@@ -182,10 +200,21 @@ export default component$(() => {
     const errors = clientFieldErrors(form.value.fields, values);
     clientErrors.value = errors;
     if (Object.keys(errors).length) return;
+    saveSignupDraft(values);
     await action.submit(new FormData(el));
   });
 
-  const values = action.value?.ok === false ? action.value.values : undefined;
+  const linkDiscord = $(() => {
+    snapshotSignupForm(form.value.fields);
+    window.location.href = "/signup/discord";
+  });
+
+  const unlinkDiscord = $(async () => {
+    snapshotSignupForm(form.value.fields);
+    await clearDiscord.submit();
+  });
+
+  const values = action.value?.ok === false ? action.value.values : draft.value;
   const serverErrors =
     action.value?.ok === false ? action.value.errors : undefined;
 
@@ -209,6 +238,7 @@ export default component$(() => {
         </header>
 
         <form
+          id="signup-form"
           preventdefault:submit
           onSubmit$={onSubmit$}
           class="grid gap-md min-w-0"
@@ -245,9 +275,7 @@ export default component$(() => {
                   <button
                     type="button"
                     class="px-md py-sm rounded-control bg-transparent text-text1 border border-border-visible text-label cursor-pointer w-fit"
-                    onClick$={async () => {
-                      await clearDiscord.submit();
-                    }}
+                    onClick$={unlinkDiscord}
                   >
                     Unlink Discord
                   </button>
@@ -256,12 +284,13 @@ export default component$(() => {
                   )}
                 </>
               ) : (
-                <a
-                  href="/signup/discord"
-                  class="px-md py-sm rounded-control bg-transparent text-text1 border border-border-visible text-label no-underline cursor-pointer inline-flex w-fit"
+                <button
+                  type="button"
+                  class="px-md py-sm rounded-control bg-transparent text-text1 border border-border-visible text-label cursor-pointer inline-flex w-fit"
+                  onClick$={linkDiscord}
                 >
                   Link Discord
-                </a>
+                </button>
               )}
             </div>
           )}

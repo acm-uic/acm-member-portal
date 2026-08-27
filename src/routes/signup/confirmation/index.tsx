@@ -1,12 +1,17 @@
-import { component$ } from "@builder.io/qwik";
+import { component$, useVisibleTask$ } from "@builder.io/qwik";
 import { Link, useLocation } from "@builder.io/qwik-city";
 import { DiscordJoinCta } from "~/components/discord/join-cta";
+import { clearSignupDraft } from "~/lib/signup-draft";
 
 export default component$(() => {
   const loc = useLocation();
   const linked = loc.url.searchParams.get("discord") === "1";
   const inGuild = loc.url.searchParams.get("inGuild");
   const showJoin = !linked || inGuild !== "1";
+
+  useVisibleTask$(() => {
+    clearSignupDraft();
+  });
 
   return (
     <main class="min-h-screen grid place-items-center p-xl">
