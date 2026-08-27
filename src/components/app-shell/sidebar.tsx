@@ -1,6 +1,11 @@
-import { component$ } from "@builder.io/qwik";
+import { $, component$ } from "@builder.io/qwik";
 import { Link, useLocation } from "@builder.io/qwik-city";
 import { ThemeToggle } from "~/components/theme-toggle";
+import {
+	DASHBOARD_VIEWS,
+	DASHBOARD_VIEW_COOKIE,
+	type DashboardView,
+} from "~/lib/dashboard/view";
 
 const NAV_ITEMS = [
 	{ href: "/dashboard", label: "Overview", icon: "icon-layout-dashboard" },
@@ -34,6 +39,13 @@ const ADMIN_NAV_ITEMS = [
 	},
 ] as const;
 
+const VIEW_LABELS: Record<DashboardView, string> = {
+	staff: "Staff",
+	sig_leader: "SIG Leader",
+	member: "Member",
+	alumni: "Alumni",
+};
+
 function navPath(pathname: string) {
 	return pathname.replace(/\/+$/, "") || "/";
 }
@@ -59,6 +71,8 @@ export const Sidebar = component$<{
 	userName: string;
 	userStatus: string;
 	isAdmin: boolean;
+	canPreviewDashboard: boolean;
+	dashboardView: DashboardView;
 }>((props) => {
 	const loc = useLocation();
 	const initials = props.userName
@@ -67,6 +81,11 @@ export const Sidebar = component$<{
 		.slice(0, 2)
 		.join("")
 		.toUpperCase();
+
+	const onViewChange = $((view: string) => {
+		document.cookie = `${DASHBOARD_VIEW_COOKIE}=${encodeURIComponent(view)}; path=/; max-age=31536000; SameSite=Lax`;
+		window.location.assign("/dashboard");
+	});
 
 	return (
 		<aside class="w-[220px] shrink-0 self-start sticky top-0 h-screen flex flex-col px-sm py-lg border-r border-border bg-surface1">
@@ -109,6 +128,27 @@ export const Sidebar = component$<{
 				)}
 			</nav>
 			<div class="mt-auto pt-md border-t border-border flex flex-col gap-sm px-sm">
+				{props.canPreviewDashboard && (
+					<label class="grid gap-2xs">
+						<span class="text-caption text-text3 uppercase tracking-wider">
+							Dashboard view
+						</span>
+						<select
+							class="w-full h-[32px] px-sm rounded-control border border-border bg-surface2 text-body-sm text-text1"
+							value={props.dashboardView}
+							onChange$={(event) => {
+								const value = (event.target as HTMLSelectElement).value;
+								onViewChange(value);
+							}}
+						>
+							{DASHBOARD_VIEWS.map((view) => (
+								<option key={view} value={view}>
+									{VIEW_LABELS[view]}
+								</option>
+							))}
+						</select>
+					</label>
+				)}
 				<ThemeToggle class="w-full" />
 				<div class="flex items-center gap-sm min-w-0">
 					<div class="w-[34px] h-[34px] shrink-0 grid place-items-center rounded-pill bg-surface3 text-caption">

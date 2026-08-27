@@ -76,6 +76,20 @@ describe("applySqlMigrations (PGlite)", () => {
 		);
 		expect(cols).not.toContain("display_name");
 
+		const { rows: sigRows } = await query(
+			`SELECT key, display_name, active FROM sigs ORDER BY key`,
+		);
+		expect(sigRows).toHaveLength(14);
+		expect(sigRows.map((r) => String(r.key))).toEqual(
+			expect.arrayContaining(["sig-ai", "sig-webdev", "sig-systems"]),
+		);
+
+		const { rows: leaderTable } = await query(
+			`SELECT table_name FROM information_schema.tables
+       WHERE table_schema = 'public' AND table_name = 'sig_leaders'`,
+		);
+		expect(leaderTable).toHaveLength(1);
+
 		await client.close();
 	});
 
