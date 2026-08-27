@@ -44,10 +44,14 @@ terraform init
 terraform apply -var-file=dev.tfvars
 cd ..
 
-# 4. SMTP / Windows API keys on portal-secrets
-# Terraform already wrote BETTER_AUTH_SECRET and MICROSOFT_*. Add SMTP_* and
-# WINDOWS_API_* from k8s/secret.example.yaml; do not replace the Secret.
-# Skip DATABASE_URL. The chart reads it from CloudNativePG (portal-db-app).
+# 4. SMTP / Discord / Windows API keys on portal-secrets
+# Terraform already wrote BETTER_AUTH_SECRET and MICROSOFT_*. Add SMTP_*,
+# DISCORD_*, and WINDOWS_API_* from k8s/secret.example.yaml; do not replace
+# the Secret. Skip DATABASE_URL. The chart reads it from CloudNativePG
+# (portal-db-app). Discord linking is optional: omit DISCORD_CLIENT_ID to hide
+# the UI. Register redirect URIs `{origin}/api/auth/callback/discord` and
+# `{origin}/signup/discord/callback` on the Discord application. No bot is
+# required for link/unlink.
 
 # 5. Portal + worker + alumni digest + CloudNativePG Cluster
 helm upgrade --install acm-portal ./helm/acm-member-portal \
@@ -106,8 +110,9 @@ namespace-wide default-deny kept as a reference.
 ## Daily development
 
 ```bash
-# Zero-config local mode (no Postgres, Entra, SMTP, or Windows API):
+# Zero-config local mode (no Postgres, Entra, SMTP, Discord, or Windows API):
 # boots in-process PGlite, seeds officer@localhost / local-dev, stubs mail + AD.
+# Discord link/unlink stays hidden until DISCORD_CLIENT_ID is set.
 bun run dev          # or: npm run dev — vite on :5173
 # Reset local DB + stub mail: rm -rf .data
 
