@@ -130,7 +130,11 @@ export const Sidebar = component$<{
 			</nav>
 			<div class="mt-auto pt-md border-t border-border flex flex-col gap-sm px-sm">
 				{props.canPreviewDashboard && (
-					<Form action={props.setDashboardView} class="grid gap-2xs">
+					<Form
+						action={props.setDashboardView}
+						reloadDocument
+						class="grid gap-2xs"
+					>
 						<label class="grid gap-2xs">
 							<span class="text-caption text-text3 uppercase tracking-wider">
 								Dashboard view
@@ -139,8 +143,9 @@ export const Sidebar = component$<{
 								name="view"
 								class="w-full h-[32px] px-sm rounded-control border border-border bg-surface2 text-body-sm text-text1"
 								value={props.dashboardView}
-								onChange$={(_, element) => {
-									element.form?.requestSubmit();
+								onChange$={(event) => {
+									const form = (event.target as HTMLSelectElement).form;
+									form?.requestSubmit();
 								}}
 							>
 								{DASHBOARD_VIEWS.map((view) => (
