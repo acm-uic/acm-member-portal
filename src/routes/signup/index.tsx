@@ -1,7 +1,11 @@
 import { $, component$, useSignal, useVisibleTask$ } from "@builder.io/qwik";
 import { routeAction$, routeLoader$ } from "@builder.io/qwik-city";
 import { and, eq } from "drizzle-orm";
-import { DiscordJoinCta } from "~/components/discord/join-cta";
+import {
+  DiscordJoinCta,
+  discordLinkButtonClass,
+  discordUnlinkButtonClass,
+} from "~/components/discord/join-cta";
 import { DynamicField } from "~/components/forms/dynamic-field";
 import { ThemeToggle } from "~/components/theme-toggle";
 import { db } from "~/lib/db";
@@ -15,10 +19,7 @@ import {
 import { discordIdTaken, discordTakenMessage } from "~/lib/discord-link";
 import { loadPublishedSignupForm } from "~/lib/forms/fields";
 import type { FormFieldDef } from "~/lib/types";
-import {
-  loadSignupDraft,
-  saveSignupDraft,
-} from "~/lib/signup-draft";
+import { loadSignupDraft, saveSignupDraft } from "~/lib/signup-draft";
 import {
   clientFieldErrors,
   compileFormSchema,
@@ -255,7 +256,7 @@ export default component$(() => {
 
           {form.value.discordConfigured && (
             <div class="grid gap-sm">
-              <p class="text-label text-text2 m-0">Discord (optional)</p>
+              <p class="text-label text-discord m-0">Discord (optional)</p>
               {form.value.discordError && (
                 <p class="text-danger text-label m-0">
                   {form.value.discordError}
@@ -274,7 +275,7 @@ export default component$(() => {
                   </p>
                   <button
                     type="button"
-                    class="px-md py-sm rounded-control bg-transparent text-text1 border border-border-visible text-label cursor-pointer w-fit"
+                    class={discordUnlinkButtonClass}
                     onClick$={unlinkDiscord}
                   >
                     Unlink Discord
@@ -286,7 +287,7 @@ export default component$(() => {
               ) : (
                 <button
                   type="button"
-                  class="px-md py-sm rounded-control bg-transparent text-text1 border border-border-visible text-label cursor-pointer inline-flex w-fit"
+                  class={discordLinkButtonClass}
                   onClick$={linkDiscord}
                 >
                   Link Discord

@@ -1,7 +1,11 @@
 import { $, component$, useSignal } from "@builder.io/qwik";
 import { routeAction$, routeLoader$ } from "@builder.io/qwik-city";
 import { and, eq } from "drizzle-orm";
-import { DiscordJoinCta } from "~/components/discord/join-cta";
+import {
+  DiscordJoinCta,
+  discordLinkButtonClass,
+  discordUnlinkButtonClass,
+} from "~/components/discord/join-cta";
 import { DynamicField } from "~/components/forms/dynamic-field";
 import { auth } from "~/lib/auth";
 import { db } from "~/lib/db";
@@ -341,8 +345,8 @@ export default component$(() => {
       </header>
 
       {profile.value.discordConfigured && (
-        <section class="grid gap-sm bg-surface1 border border-border rounded-component p-md">
-          <h2 class="text-subheading m-0">Discord</h2>
+        <section class="grid gap-sm bg-discord-subtle border border-discord/40 rounded-component p-md">
+          <h2 class="text-subheading text-discord m-0">Discord</h2>
           {profile.value.linkFailed && (
             <p class="text-danger text-label m-0">
               That Discord account is already linked to another member or a
@@ -359,7 +363,7 @@ export default component$(() => {
               </p>
               <button
                 type="button"
-                class="px-md py-sm rounded-control bg-transparent text-text1 border border-border-visible text-label cursor-pointer w-fit"
+                class={discordUnlinkButtonClass}
                 onClick$={async () => {
                   await unlinkDiscord.submit();
                 }}
@@ -377,7 +381,7 @@ export default component$(() => {
               </p>
               <button
                 type="button"
-                class="px-md py-sm rounded-control bg-transparent text-text1 border border-border-visible text-label cursor-pointer w-fit"
+                class={discordLinkButtonClass}
                 onClick$={linkDiscord}
               >
                 Link Discord
