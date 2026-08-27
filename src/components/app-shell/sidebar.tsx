@@ -1,6 +1,15 @@
 import { component$ } from "@builder.io/qwik";
-import { Link, useLocation } from "@builder.io/qwik-city";
+import {
+	Form,
+	Link,
+	useLocation,
+	type ActionStore,
+} from "@builder.io/qwik-city";
 import { ThemeToggle } from "~/components/theme-toggle";
+import {
+	DASHBOARD_VIEWS,
+	type DashboardView,
+} from "~/lib/dashboard/view";
 
 const NAV_ITEMS = [
 	{ href: "/dashboard", label: "Overview", icon: "icon-layout-dashboard" },
@@ -34,6 +43,13 @@ const ADMIN_NAV_ITEMS = [
 	},
 ] as const;
 
+const VIEW_LABELS: Record<DashboardView, string> = {
+	staff: "Staff",
+	sig_leader: "SIG Leader",
+	member: "Member",
+	alumni: "Alumni",
+};
+
 function navPath(pathname: string) {
 	return pathname.replace(/\/+$/, "") || "/";
 }
@@ -59,6 +75,10 @@ export const Sidebar = component$<{
 	userName: string;
 	userStatus: string;
 	isAdmin: boolean;
+	canPreviewDashboard: boolean;
+	dashboardView: DashboardView;
+	// Action created in (member)/layout — typed loosely to avoid a layout↔sidebar cycle.
+	setDashboardView: ActionStore<unknown, { view: string }, boolean>;
 }>((props) => {
 	const loc = useLocation();
 	const initials = props.userName
@@ -109,6 +129,34 @@ export const Sidebar = component$<{
 				)}
 			</nav>
 			<div class="mt-auto pt-md border-t border-border flex flex-col gap-sm px-sm">
+				{props.canPreviewDashboard && (
+					<Form
+						action={props.setDashboardView}
+						reloadDocument
+						class="grid gap-2xs"
+					>
+						<label class="grid gap-2xs">
+							<span class="text-caption text-text3 uppercase tracking-wider">
+								Dashboard view
+							</span>
+							<select
+								name="view"
+								class="w-full h-[32px] px-sm rounded-control border border-border bg-surface2 text-body-sm text-text1"
+								value={props.dashboardView}
+								onChange$={(event) => {
+									const form = (event.target as HTMLSelectElement).form;
+									form?.requestSubmit();
+								}}
+							>
+								{DASHBOARD_VIEWS.map((view) => (
+									<option key={view} value={view}>
+										{VIEW_LABELS[view]}
+									</option>
+								))}
+							</select>
+						</label>
+					</Form>
+				)}
 				<ThemeToggle class="w-full" />
 				<div class="flex items-center gap-sm min-w-0">
 					<div class="w-[34px] h-[34px] shrink-0 grid place-items-center rounded-pill bg-surface3 text-caption">
