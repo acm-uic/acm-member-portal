@@ -84,6 +84,11 @@ export const Sidebar = component$<{
 
 	const onViewChange = $((view: string) => {
 		document.cookie = `${DASHBOARD_VIEW_COOKIE}=${encodeURIComponent(view)}; path=/; max-age=31536000; SameSite=Lax`;
+		const path = window.location.pathname.replace(/\/+$/, "") || "/";
+		if (path === "/dashboard") {
+			window.location.reload();
+			return;
+		}
 		window.location.assign("/dashboard");
 	});
 
