@@ -260,7 +260,7 @@ INSERT INTO "form_schemas" ("form_key", "version", "status", "season", "fields",
       {"value":"sig-systems","label":"SIG Systems"},
       {"value":"sig-virtualreality","label":"SIG Virtual Reality"},
       {"value":"sig-webdev","label":"SIG WebDev"}]},
-    {"key":"internships","label":"How many internships have you had?","type":"number","required":true,"order":6,"min":0,"max":100}
+    {"key":"internships","label":"How many internships have you had?","type":"number","required":false,"order":6,"min":0,"max":100}
   ]}'::jsonb,
   now()
 )
