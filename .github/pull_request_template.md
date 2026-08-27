@@ -9,5 +9,5 @@
 ## Checklist
 
 - [ ] I've labeled the PR appropriately.
-- [ ] I've run `npm run check` and `npm test`, and verified the change.
+- [ ] I've run `bun run check` and `bun test`, and verified the change.
 - [ ] I've linked the appropriate issues and related PRs.

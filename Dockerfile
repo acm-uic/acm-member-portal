@@ -1,18 +1,19 @@
+ARG BUN_VERSION=1
 ARG NODE_VERSION=24
-FROM node:${NODE_VERSION}-alpine
-RUN corepack enable
-WORKDIR /app
 
 # ---- deps --------------------------------------------------------------
-FROM node:${NODE_VERSION}-alpine AS deps
-COPY package.json package-lock.json* ./
-RUN npm ci
+FROM oven/bun:${BUN_VERSION} AS deps
+WORKDIR /app
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile
 
 # ---- build -------------------------------------------------------------
-FROM node:${NODE_VERSION}-alpine AS build
+FROM oven/bun:${BUN_VERSION} AS build
+WORKDIR /app
+ENV NODE_ENV=production
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-RUN npm run build
+RUN bun run build
 
 # ---- runtime -----------------------------------------------------------
 FROM node:${NODE_VERSION}-alpine AS runtime

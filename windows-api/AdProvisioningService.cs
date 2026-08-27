@@ -202,7 +202,7 @@ public sealed class AdProvisioningService
         };
         for (var i = 0; i < 16; i++) chars.Add(Pick(all));
         var array = chars.ToArray();
-        RandomNumberGenerator.Shuffle(array);
+        RandomNumberGenerator.Shuffle<char>(array);
         return new string(array);
 
         static char Pick(string pool) => pool[RandomNumberGenerator.GetInt32(pool.Length)];
