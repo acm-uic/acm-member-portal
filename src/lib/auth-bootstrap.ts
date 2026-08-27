@@ -2,12 +2,13 @@ import { desc, eq, sql } from "drizzle-orm";
 import { db } from "~/lib/db";
 import { isEmbeddedDb } from "~/lib/db/mode";
 import {
-	memberProfiles,
-	provisioningEvents,
-	signupSubmissions,
-	user,
-	userRoles,
+  memberProfiles,
+  provisioningEvents,
+  signupSubmissions,
+  user,
+  userRoles,
 } from "~/lib/db/schema";
+import { discordIdTaken, insertDiscordAccount } from "~/lib/discord-link";
 import { formatSignupDisplayName } from "~/lib/forms/fields";
 
 /** Serializes concurrent first logins (distinct from migrate.ts's lock id). */
@@ -15,8 +16,8 @@ const BOOTSTRAP_LOCK_ID = 727_002;
 
 /** Seeded in drizzle/0000_initial.sql */
 const ROLE_IDS = {
-	member: "00000000-0000-0000-0000-000000000001",
-	admin: "00000000-0000-0000-0000-000000000003",
+  member: "00000000-0000-0000-0000-000000000001",
+  admin: "00000000-0000-0000-0000-000000000003",
 } as const;
 
 /**
@@ -33,92 +34,108 @@ const ROLE_IDS = {
  *    first login — the AD account is the login precondition).
  */
 export async function bootstrapUser(u: {
-	id: string;
-	email: string;
-	netid: string | null;
-	displayName: string | null;
+  id: string;
+  email: string;
+  netid: string | null;
+  displayName: string | null;
 }) {
-	await db.transaction(async (tx) => {
-		if (!isEmbeddedDb()) {
-			await tx.execute(sql`SELECT pg_advisory_xact_lock(${BOOTSTRAP_LOCK_ID})`);
-		}
+  await db.transaction(async (tx) => {
+    if (!isEmbeddedDb()) {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(${BOOTSTRAP_LOCK_ID})`);
+    }
 
-		const [{ count }] = (
-			await tx.execute<{ count: number }>(
-				sql`SELECT count(*)::int AS count FROM "user"`,
-			)
-		).rows;
+    const [{ count }] = (
+      await tx.execute<{ count: number }>(
+        sql`SELECT count(*)::int AS count FROM "user"`,
+      )
+    ).rows;
 
-		const grants =
-			count === 1
-				? [
-						{ userId: u.id, roleId: ROLE_IDS.admin },
-						{ userId: u.id, roleId: ROLE_IDS.member },
-					]
-				: [{ userId: u.id, roleId: ROLE_IDS.member }];
+    const grants =
+      count === 1
+        ? [
+            { userId: u.id, roleId: ROLE_IDS.admin },
+            { userId: u.id, roleId: ROLE_IDS.member },
+          ]
+        : [{ userId: u.id, roleId: ROLE_IDS.member }];
 
-		await tx.insert(userRoles).values(grants).onConflictDoNothing();
+    await tx.insert(userRoles).values(grants).onConflictDoNothing();
 
-		let answers: Record<string, unknown> = {};
-		let answersSchemaVersionId: string | null = null;
-		let adProvisioningStatus: "pending" | "provisioned" | "failed" = "pending";
-		let provisionedAt: Date | null = null;
+    let answers: Record<string, unknown> = {};
+    let answersSchemaVersionId: string | null = null;
+    let adProvisioningStatus: "pending" | "provisioned" | "failed" = "pending";
+    let provisionedAt: Date | null = null;
 
-		if (u.netid) {
-			const [submission] = await tx
-				.select()
-				.from(signupSubmissions)
-				.where(eq(signupSubmissions.netid, u.netid))
-				.orderBy(desc(signupSubmissions.createdAt))
-				.limit(1);
+    if (u.netid) {
+      const [submission] = await tx
+        .select()
+        .from(signupSubmissions)
+        .where(eq(signupSubmissions.netid, u.netid))
+        .orderBy(desc(signupSubmissions.createdAt))
+        .limit(1);
 
-			if (submission?.status === "approved") {
-				answers = submission.answers as Record<string, unknown>;
-				answersSchemaVersionId = submission.schemaVersionId;
+      if (submission?.status === "approved") {
+        answers = submission.answers as Record<string, unknown>;
+        answersSchemaVersionId = submission.schemaVersionId;
 
-				const [event] = await tx
-					.select()
-					.from(provisioningEvents)
-					.where(eq(provisioningEvents.submissionId, submission.id))
-					.orderBy(desc(provisioningEvents.createdAt))
-					.limit(1);
+        const [event] = await tx
+          .select()
+          .from(provisioningEvents)
+          .where(eq(provisioningEvents.submissionId, submission.id))
+          .orderBy(desc(provisioningEvents.createdAt))
+          .limit(1);
 
-				if (event?.status === "provisioned") {
-					adProvisioningStatus = "provisioned";
-					provisionedAt = event.updatedAt;
-				} else if (event?.status === "dead_lettered") {
-					adProvisioningStatus = "failed";
-				}
+        if (event?.status === "provisioned") {
+          adProvisioningStatus = "provisioned";
+          provisionedAt = event.updatedAt;
+        } else if (event?.status === "dead_lettered") {
+          adProvisioningStatus = "failed";
+        }
 
-				const displayName = formatSignupDisplayName({
-					firstName: submission.firstName,
-					lastName: submission.lastName,
-					preferredName: submission.preferredName,
-				});
-				await tx
-					.update(user)
-					.set({
-						uin: submission.uin,
-						username: submission.username,
-						firstName: submission.firstName,
-						lastName: submission.lastName,
-						preferredName: submission.preferredName,
-						displayName,
-						name: displayName,
-					})
-					.where(eq(user.id, u.id));
-			}
-		}
+        const displayName = formatSignupDisplayName({
+          firstName: submission.firstName,
+          lastName: submission.lastName,
+          preferredName: submission.preferredName,
+        });
 
-		await tx
-			.insert(memberProfiles)
-			.values({
-				userId: u.id,
-				answers,
-				answersSchemaVersionId,
-				adProvisioningStatus,
-				provisionedAt,
-			})
-			.onConflictDoNothing();
-	});
+        let discordId: string | null = null;
+        let discordUsername: string | null = null;
+        if (submission.discordId) {
+          const taken = await discordIdTaken(tx, submission.discordId, u.id);
+          if (!taken) {
+            discordId = submission.discordId;
+            discordUsername = submission.discordUsername;
+          }
+        }
+
+        await tx
+          .update(user)
+          .set({
+            uin: submission.uin,
+            username: submission.username,
+            firstName: submission.firstName,
+            lastName: submission.lastName,
+            preferredName: submission.preferredName,
+            displayName,
+            name: displayName,
+            ...(discordId ? { discordId, discordUsername } : {}),
+          })
+          .where(eq(user.id, u.id));
+
+        if (discordId) {
+          await insertDiscordAccount(tx, u.id, discordId);
+        }
+      }
+    }
+
+    await tx
+      .insert(memberProfiles)
+      .values({
+        userId: u.id,
+        answers,
+        answersSchemaVersionId,
+        adProvisioningStatus,
+        provisionedAt,
+      })
+      .onConflictDoNothing();
+  });
 }

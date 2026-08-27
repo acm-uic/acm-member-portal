@@ -30,7 +30,7 @@ ingress:
     enabled: false
     secretName: portal-tls
 
-# Existing Secret with BETTER_AUTH_SECRET, MICROSOFT_*, SMTP_*, WINDOWS_API_*.
+# Existing Secret with BETTER_AUTH_SECRET, MICROSOFT_*, DISCORD_*, SMTP_*, WINDOWS_API_*.
 # Terraform creates this as portal-secrets (Entra keys only). For first boot,
 # apply k8s/secret.example.yaml or set secret.create.
 existingSecret: portal-secrets
@@ -42,6 +42,9 @@ secret:
   microsoftClientId: ""
   microsoftClientSecret: ""
   microsoftTenantId: ""
+  discordClientId: ""
+  discordClientSecret: ""
+  discordGuildId: ""
   smtpHost: ""
   smtpPort: "587"
   smtpUser: ""

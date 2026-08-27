@@ -44,10 +44,14 @@ terraform init
 terraform apply -var-file=dev.tfvars
 cd ..
 
-# 4. SMTP / Windows API keys on portal-secrets
-# Terraform already wrote BETTER_AUTH_SECRET and MICROSOFT_*. Add SMTP_* and
-# WINDOWS_API_* from k8s/secret.example.yaml; do not replace the Secret.
-# Skip DATABASE_URL. The chart reads it from CloudNativePG (portal-db-app).
+# 4. SMTP / Discord / Windows API keys on portal-secrets
+# Terraform already wrote BETTER_AUTH_SECRET and MICROSOFT_*. Add SMTP_*,
+# DISCORD_*, and WINDOWS_API_* from k8s/secret.example.yaml; do not replace
+# the Secret. Skip DATABASE_URL. The chart reads it from CloudNativePG
+# (portal-db-app). Discord linking is optional: omit DISCORD_CLIENT_ID to hide
+# the UI. Register redirect URIs `{origin}/api/auth/callback/discord` and
+# `{origin}/signup/discord/callback` on the Discord application. No bot is
+# required for link/unlink.
 
 # 5. Portal + worker + alumni digest + CloudNativePG Cluster
 helm upgrade --install acm-portal ./helm/acm-member-portal \
@@ -106,8 +110,9 @@ namespace-wide default-deny kept as a reference.
 ## Daily development
 
 ```bash
-# Zero-config local mode (no Postgres, Entra, SMTP, or Windows API):
+# Zero-config local mode (no Postgres, Entra, SMTP, Discord, or Windows API):
 # boots in-process PGlite, seeds officer@localhost / local-dev, stubs mail + AD.
+# Discord link/unlink stays hidden until DISCORD_CLIENT_ID is set.
 bun run dev          # or: npm run dev — vite on :5173
 # Reset local DB + stub mail: rm -rf .data
 
@@ -125,6 +130,46 @@ Local credentials (embedded mode only):
 - Officer: `officer@local.test` / `local-dev`
 - After approving a signup, the member password is written under `.data/mail/`
 - `DEV_LOGIN=1` enables the same email/password login against a real `DATABASE_URL`
+
+### Local Discord linking
+
+The Discord buttons stay hidden until `DISCORD_CLIENT_ID` and
+`DISCORD_CLIENT_SECRET` are set. Vite loads `.env` from the repo root
+(gitignored). Leave `DATABASE_URL` unset if you still want PGlite. Copying
+`.env.example` as-is fills `DATABASE_URL` and the app will try Postgres on
+localhost instead.
+
+```bash
+# Only the Discord bits. No DATABASE_URL.
+cat >> .env <<'EOF'
+DISCORD_CLIENT_ID=your_app_id
+DISCORD_CLIENT_SECRET=your_app_secret
+DISCORD_GUILD_ID=your_server_snowflake
+ORIGIN=http://localhost:5173
+BETTER_AUTH_URL=http://localhost:5173
+EOF
+```
+
+Restart the dev server after changing `.env`. `src/lib/auth.ts` reads
+`DISCORD_*` at load time.
+
+Create an application at [discord.com/developers/applications](https://discord.com/developers/applications).
+A throwaway local app is fine. You do not need the production ACM app, a bot
+token, or a bot install.
+
+1. OAuth2 → copy Client ID and Client Secret into the env vars above.
+2. Add both redirect URIs, exactly:
+   - `http://localhost:5173/api/auth/callback/discord` (profile link)
+   - `http://localhost:5173/signup/discord/callback` (signup link)
+
+`DISCORD_GUILD_ID` is the server snowflake. It only decides whether to show
+the join CTA (https://acm.cs.uic.edu/discord). Enable Developer Mode in Discord
+(User Settings → Advanced), then right-click the server → Copy Server ID. A
+personal test server you can join and leave is easier than hitting ACM@UIC from
+localhost.
+
+After restart, `/signup` shows Link Discord, and a logged-in member sees it on
+`/dashboard/profile`.
 
 ## Deploying the Windows API
 
