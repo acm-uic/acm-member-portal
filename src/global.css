@@ -22,6 +22,8 @@
   --success-bg: #123d18;
   --warning-bg: #4d3800;
   --error-bg: #4b1113;
+  --discord: #5865f2;
+  --discord-subtle: #5865f224;
   --font-display: "Archivo", Arial, sans-serif;
   --font-body: "IBM Plex Sans", Arial, sans-serif;
   --font-mono: "IBM Plex Mono", Consolas, monospace;
@@ -75,6 +77,8 @@
   --success-bg: #effbf1;
   --warning-bg: #fff8e6;
   --error-bg: #fff0f0;
+  --discord: #5865f2;
+  --discord-subtle: #5865f21a;
 }
 
 @theme inline {
@@ -96,6 +100,8 @@
   --color-success-bg: var(--success-bg);
   --color-warning-bg: var(--warning-bg);
   --color-error-bg: var(--error-bg);
+  --color-discord: var(--discord);
+  --color-discord-subtle: var(--discord-subtle);
   --font-display: var(--font-display);
   --font-body: var(--font-body);
   --font-mono: var(--font-mono);
