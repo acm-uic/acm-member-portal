@@ -249,6 +249,39 @@ export const contentItems = pgTable(
 	(t) => [index("content_items_type_status_idx").on(t.type, t.status)],
 );
 
+export const sigs = pgTable("sigs", {
+	id: uuid("id").primaryKey().defaultRandom(),
+	key: text("key").notNull().unique(),
+	displayName: text("display_name").notNull(),
+	active: boolean("active").notNull().default(true),
+	createdAt: timestamp("created_at", { withTimezone: true })
+		.notNull()
+		.defaultNow(),
+	updatedAt: timestamp("updated_at", { withTimezone: true })
+		.notNull()
+		.defaultNow(),
+});
+
+export const sigLeaders = pgTable(
+	"sig_leaders",
+	{
+		userId: text("user_id")
+			.notNull()
+			.references(() => user.id, { onDelete: "cascade" }),
+		sigId: uuid("sig_id")
+			.notNull()
+			.references(() => sigs.id, { onDelete: "cascade" }),
+		assignedBy: text("assigned_by").references(() => user.id),
+		assignedAt: timestamp("assigned_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(t) => [
+		primaryKey({ columns: [t.userId, t.sigId] }),
+		index("sig_leaders_sig_id_idx").on(t.sigId),
+	],
+);
+
 export const auditEvents = pgTable(
 	"audit_events",
 	{
@@ -307,6 +340,8 @@ export const schema = {
 	rolePermissions,
 	userRoles,
 	contentItems,
+	sigs,
+	sigLeaders,
 	auditEvents,
 	provisioningEvents,
 };
