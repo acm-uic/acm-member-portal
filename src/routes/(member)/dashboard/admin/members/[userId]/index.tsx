@@ -2,7 +2,7 @@ import { component$ } from "@builder.io/qwik";
 import { Link, routeLoader$ } from "@builder.io/qwik-city";
 import { desc, eq, inArray } from "drizzle-orm";
 import { db } from "~/lib/db";
-import { auditEvents, user } from "~/lib/db/schema";
+import { auditEvents, roles, user } from "~/lib/db/schema";
 import { requirePermission } from "~/lib/rbac/guards";
 
 const FIELD_LABELS: Record<string, string> = {
@@ -13,7 +13,36 @@ const FIELD_LABELS: Record<string, string> = {
 	username: "Username",
 	uin: "UIN",
 	email: "Email",
+	role: "Role",
+	roleId: "Role",
 };
+
+function roleDisplayName(
+	roleId: unknown,
+	names: Map<string, string>,
+): string | null {
+	if (typeof roleId !== "string" || !roleId) return null;
+	return names.get(roleId) ?? roleId;
+}
+
+function roleFieldChanges(
+	action: string,
+	after: Record<string, unknown>,
+	names: Map<string, string>,
+): { field: string; oldValue: unknown; newValue: unknown }[] | null {
+	if (
+		action !== "members.role.assign" &&
+		action !== "members.role.remove"
+	) {
+		return null;
+	}
+	const name = roleDisplayName(after.roleId, names);
+	if (!name) return null;
+	if (action === "members.role.assign") {
+		return [{ field: "role", oldValue: null, newValue: name }];
+	}
+	return [{ field: "role", oldValue: name, newValue: null }];
+}
 
 function formatValue(value: unknown): string {
 	if (value == null || value === "") return "—";
@@ -74,13 +103,33 @@ export const useMemberHistory = routeLoader$(async (event) => {
 	const actorIds = [
 		...new Set(rows.map((e) => e.actorId).filter((id): id is string => !!id)),
 	];
-	const actors = actorIds.length
-		? await db
-				.select({ id: user.id, name: user.name })
-				.from(user)
-				.where(inArray(user.id, actorIds))
-		: [];
+	const roleIds = [
+		...new Set(
+			rows.flatMap((e) => {
+				const after = (e.after ?? {}) as Record<string, unknown>;
+				const before = (e.before ?? {}) as Record<string, unknown>;
+				return [after.roleId, before.roleId].filter(
+					(id): id is string => typeof id === "string" && id.length > 0,
+				);
+			}),
+		),
+	];
+	const [actors, roleRows] = await Promise.all([
+		actorIds.length
+			? db
+					.select({ id: user.id, name: user.name })
+					.from(user)
+					.where(inArray(user.id, actorIds))
+			: Promise.resolve([]),
+		roleIds.length
+			? db
+					.select({ id: roles.id, displayName: roles.displayName })
+					.from(roles)
+					.where(inArray(roles.id, roleIds))
+			: Promise.resolve([]),
+	]);
 	const actorName = new Map(actors.map((a) => [a.id, a.name]));
+	const roleName = new Map(roleRows.map((r) => [r.id, r.displayName]));
 
 	return {
 		member: row,
@@ -91,6 +140,7 @@ export const useMemberHistory = routeLoader$(async (event) => {
 				| undefined;
 			const before = (e.before ?? {}) as Record<string, unknown>;
 			const changes =
+				roleFieldChanges(e.action, after, roleName) ??
 				stored ??
 				Object.keys({ ...before, ...after })
 					.filter((k) => k !== "changes")
@@ -99,8 +149,14 @@ export const useMemberHistory = routeLoader$(async (event) => {
 					)
 					.map((field) => ({
 						field,
-						oldValue: before[field],
-						newValue: after[field],
+						oldValue:
+							field === "roleId"
+								? roleDisplayName(before[field], roleName)
+								: before[field],
+						newValue:
+							field === "roleId"
+								? roleDisplayName(after[field], roleName)
+								: after[field],
 					}));
 			return {
 				id: e.id,
@@ -166,19 +222,27 @@ export default component$(() => {
 										</tr>
 									</thead>
 									<tbody>
-										{event.changes.map((c) => (
-											<tr key={c.field}>
-												<td class="py-2xs pr-sm text-text1">
-													{FIELD_LABELS[c.field] ?? c.field}
-												</td>
-												<td class="py-2xs pr-sm font-mono text-text3">
-													{formatValue(c.oldValue)}
-												</td>
-												<td class="py-2xs font-mono text-text1">
-													{formatValue(c.newValue)}
-												</td>
-											</tr>
-										))}
+										{event.changes.map((c) => {
+											const isRole =
+												c.field === "role" || c.field === "roleId";
+											return (
+												<tr key={c.field}>
+													<td class="py-2xs pr-sm text-text1">
+														{FIELD_LABELS[c.field] ?? c.field}
+													</td>
+													<td
+														class={`py-2xs pr-sm text-text3 ${isRole ? "" : "font-mono"}`}
+													>
+														{formatValue(c.oldValue)}
+													</td>
+													<td
+														class={`py-2xs text-text1 ${isRole ? "" : "font-mono"}`}
+													>
+														{formatValue(c.newValue)}
+													</td>
+												</tr>
+											);
+										})}
 									</tbody>
 								</table>
 							)}
