@@ -112,12 +112,8 @@ namespace-wide default-deny kept as a reference.
 ```bash
 # Zero-config local mode (no Postgres, Entra, SMTP, Discord, or Windows API):
 # boots in-process PGlite, seeds officer@localhost / local-dev, stubs mail + AD.
-<<<<<<< HEAD
 # Discord link/unlink stays hidden until DISCORD_CLIENT_ID is set.
-bun run dev          # or: npm run dev — vite on :5173
-=======
 bun run dev          # vite on :5173
->>>>>>> 8732723 (Switch container build to bun and fix CI failures)
 # Reset local DB + stub mail: rm -rf .data
 
 # Against a real Postgres (CloudNativePG-shaped):
