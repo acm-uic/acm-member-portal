@@ -76,11 +76,13 @@ describe("provisioning stub drain", () => {
 			.insert(signupSubmissions)
 			.values({
 				schemaVersionId: schema!.id,
-				displayName: "Test User",
+				firstName: "Test",
+				lastName: "User",
+				preferredName: null,
 				netid: "tuser",
 				uin: "123456789",
 				email: "tuser@example.com",
-				answers: { major: "CS" },
+				answers: { major: "Computer Science", college: "engineering" },
 				status: "approved",
 			})
 			.returning();
@@ -91,9 +93,13 @@ describe("provisioning stub drain", () => {
 			submissionId: submission!.id,
 			payload: {
 				netid: "tuser",
+				firstName: "Test",
+				lastName: "User",
 				displayName: "Test User",
 				email: "tuser@example.com",
 				uin: "123456789",
+				department: "Computer Science",
+				company: "Engineering",
 				eventId,
 			},
 			status: "pending",

@@ -30,6 +30,7 @@ export interface FormFieldDef {
 	helpText?: string;
 	min?: number;
 	max?: number;
+	minLength?: number;
 	maxLength?: number;
 }
 
@@ -60,10 +61,20 @@ export interface PortalSession {
 
 export interface ProvisioningApiCreateRequest {
 	netid: string;
+	firstName: string;
+	lastName: string;
+	/** Preferred name when set; omitted when blank. */
+	preferredName?: string;
+	/** Preferred name, or "First Last" — maps to AD DisplayName. */
 	displayName: string;
 	email: string;
+	/** UIN → AD EmployeeID. */
 	uin?: string;
-	/** Outbox event UUID — stored in an AD extensionAttribute for forensics. */
+	/** Major → AD Department. */
+	department?: string;
+	/** College → AD Company. */
+	company?: string;
+	/** Outbox event UUID — correlation only; not written to AD. */
 	eventId: string;
 }
 

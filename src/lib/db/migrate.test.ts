@@ -33,11 +33,25 @@ describe("applySqlMigrations (PGlite)", () => {
 		expect(rows[0].season).toBe("2026-2027");
 		expect(rows[0].status).toBe("published");
 
-		const definition = rows[0].fields as { fields: { key: string }[] };
+		const definition = rows[0].fields as {
+			fields: { key: string; options?: { value: string }[] }[];
+		};
 		const keys = definition.fields.map((f) => f.key);
 		expect(keys).toContain("college");
 		expect(keys).toContain("major");
 		expect(keys).toContain("grad_year");
+
+		const college = definition.fields.find((f) => f.key === "college");
+		const collegeValues = (college?.options ?? []).map((o) => o.value);
+		expect(collegeValues).toEqual(
+			expect.arrayContaining([
+				"engineering",
+				"liberal_arts_sciences",
+				"business_administration",
+				"pharmacy",
+				"honors",
+			]),
+		);
 
 		await client.close();
 	});

@@ -1,6 +1,7 @@
 import { eq, sql } from "drizzle-orm";
 import { db } from "../db";
 import { provisioningEvents, type signupSubmissions } from "../db/schema";
+import { formatSignupDisplayName, companyForCollege } from "../forms/fields";
 import { nextDelayMs, isDeadLettered } from "./backoff";
 
 type DbOrTx = Pick<typeof db, "insert" | "update" | "execute" | "select">;
@@ -19,13 +20,31 @@ export async function enqueueProvisioning(
 	await tx.insert(provisioningEvents).values({
 		id: eventId,
 		submissionId: submission.id,
-		payload: {
-			netid: submission.netid,
-			displayName: submission.displayName,
-			email: submission.email,
-			uin: submission.uin ?? undefined,
-			eventId,
-		},
+		payload: (() => {
+			const answers = (submission.answers ?? {}) as Record<string, unknown>;
+			const major =
+				typeof answers.major === "string" && answers.major.trim()
+					? answers.major.trim()
+					: undefined;
+			const college =
+				typeof answers.college === "string" ? answers.college : undefined;
+			return {
+				netid: submission.netid,
+				firstName: submission.firstName,
+				lastName: submission.lastName,
+				preferredName: submission.preferredName?.trim() || undefined,
+				displayName: formatSignupDisplayName({
+					firstName: submission.firstName,
+					lastName: submission.lastName,
+					preferredName: submission.preferredName,
+				}),
+				email: submission.email,
+				uin: submission.uin ?? undefined,
+				department: major,
+				company: companyForCollege(college),
+				eventId,
+			};
+		})(),
 	});
 }
 

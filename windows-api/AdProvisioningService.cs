@@ -1,4 +1,3 @@
-using System.Collections;
 using System.Management.Automation;
 using System.Management.Automation.Runspaces;
 using System.Security;
@@ -6,7 +5,17 @@ using System.Security.Cryptography;
 
 namespace AcmProvisioning;
 
-public record CreateUserRequest(string Netid, string DisplayName, string Email, string? Uin, string EventId);
+public record CreateUserRequest(
+    string Netid,
+    string FirstName,
+    string LastName,
+    string DisplayName,
+    string Email,
+    string? Uin,
+    string EventId,
+    string? PreferredName = null,
+    string? Department = null,
+    string? Company = null);
 public record CreateUserResponse(string SamAccountName, bool Existed, string? OneTimePassword);
 
 public class ProvisioningException(string message) : Exception(message);
@@ -70,18 +79,26 @@ public sealed class AdProvisioningService
         using var ps = CreateShell(out var runspace);
         using (runspace)
         {
+            // Name/CN: "First Last" (matches manual New-ADUser)
+            // DisplayName: preferred name when set, else "First Last"
+            // GivenName/Surname: legal first/last
+            // EmployeeID: UIN; Department: major; Company: college
+            var legalName = $"{req.FirstName} {req.LastName}".Trim();
             ps.AddCommand("New-ADUser")
-              .AddParameter("Name", req.DisplayName)
+              .AddParameter("Name", legalName)
               .AddParameter("DisplayName", req.DisplayName)
+              .AddParameter("GivenName", req.FirstName)
+              .AddParameter("Surname", req.LastName)
               .AddParameter("SamAccountName", req.Netid)
               .AddParameter("UserPrincipalName", $"{req.Netid}@{_upnSuffix}")
               .AddParameter("EmailAddress", req.Email)
               .AddParameter("AccountPassword", ToSecureString(password))
               .AddParameter("Enabled", true)
               .AddParameter("ChangePasswordAtLogon", true)
-              .AddParameter("Path", _usersOu)
-              .AddParameter("OtherAttributes", new Hashtable { ["extensionAttribute1"] = req.EventId });
+              .AddParameter("Path", _usersOu);
             if (!string.IsNullOrWhiteSpace(req.Uin)) ps.AddParameter("EmployeeID", req.Uin);
+            if (!string.IsNullOrWhiteSpace(req.Department)) ps.AddParameter("Department", req.Department);
+            if (!string.IsNullOrWhiteSpace(req.Company)) ps.AddParameter("Company", req.Company);
             if (HasExplicitDc) ps.AddParameter("Server", _domainController);
 
             await ps.InvokeAsync();

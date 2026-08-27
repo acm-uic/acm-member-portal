@@ -49,9 +49,12 @@ export const useSubmitSignup = routeAction$(async (data, event) => {
 		};
 	}
 
+	const preferred = base.preferred_name?.trim() || null;
 	await db.insert(signupSubmissions).values({
 		schemaVersionId: form.schemaVersionId,
-		displayName: base.display_name,
+		firstName: base.first_name,
+		lastName: base.last_name,
+		preferredName: preferred,
 		netid: base.netid,
 		uin: base.uin,
 		email: base.email,

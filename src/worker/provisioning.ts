@@ -35,9 +35,14 @@ export async function drainOnce(
 	try {
 		const payload = event.payload as {
 			netid: string;
+			firstName: string;
+			lastName: string;
+			preferredName?: string;
 			email: string;
 			displayName: string;
 			uin?: string;
+			department?: string;
+			company?: string;
 			eventId: string;
 		};
 
@@ -141,9 +146,14 @@ async function seedLocalMemberLogin(args: {
 async function callWindowsApi(
 	payload: {
 		netid: string;
+		firstName: string;
+		lastName: string;
+		preferredName?: string;
 		email: string;
 		displayName: string;
 		uin?: string;
+		department?: string;
+		company?: string;
 		eventId: string;
 	},
 	fetchImpl: typeof fetch,

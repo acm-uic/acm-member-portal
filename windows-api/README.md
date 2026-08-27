@@ -11,7 +11,11 @@ ACM@UIC signups. The member portal's outbox worker is its only caller.
 | POST | `/users` | Bearer | create AD user (idempotent on sAMAccountName) |
 | GET | `/users/{netid}` | Bearer | existence check |
 
-`POST /users` body: `{ netid, displayName, email, uin?, eventId }`.
+`POST /users` body: `{ netid, firstName, lastName, displayName, email, uin?, department?, company?, eventId, preferredName? }`.
+AD mapping: `GivenName`←firstName, `Surname`←lastName, `Name`←"First Last",
+`DisplayName`←displayName (preferred or "First Last"), `EmployeeID`←uin,
+`Department`←major, `Company`←college, `EmailAddress`←email,
+`sAMAccountName`/`UserPrincipalName`←netid. `eventId` is correlation-only.
 Response: `{ samAccountName, existed, oneTimePassword? }` — `oneTimePassword`
 is returned only when a NEW account was created. It is never logged or stored.
 
@@ -47,8 +51,8 @@ sc.exe start AcmProvisioning
 ```powershell
 curl -H "Authorization: Bearer <token>" -X POST http://localhost:8080/users `
   -H "content-type: application/json" `
-  -d '{"netid":"amorga42","displayName":"Alex Morgan","email":"alex@example.com","uin":"678901234","eventId":"<uuid>"}'
+  -d '{"netid":"amorga42","firstName":"Alex","lastName":"Morgan","preferredName":"Alex","displayName":"Alex","email":"alex@example.com","uin":"678901234","department":"Computer Science","company":"Engineering","eventId":"<uuid>"}'
 # → { "samAccountName": "amorga42", "existed": false, "oneTimePassword": "…" }
 # replay → { "samAccountName": "amorga42", "existed": true }
-Get-ADUser amorga42 -Properties EmployeeID, extensionAttribute1
+Get-ADUser amorga42 -Properties GivenName, Surname, DisplayName, EmployeeID, Department, Company, EmailAddress
 ```

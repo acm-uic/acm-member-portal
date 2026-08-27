@@ -31,6 +31,7 @@ const fieldDefSchema = z.object({
 	helpText: z.string().optional(),
 	min: z.number().optional(),
 	max: z.number().optional(),
+	minLength: z.number().int().positive().optional(),
 	maxLength: z.number().int().positive().optional(),
 });
 const fieldsPayloadSchema = z.object({ fields: z.array(fieldDefSchema) });

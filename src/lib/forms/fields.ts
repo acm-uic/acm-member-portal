@@ -7,7 +7,9 @@ import type { FormFieldDef, FormSchemaDefinition } from "~/lib/types";
  * them ahead of admin-defined fields (orders 1..n).
  */
 export const BASE_FIELD_KEYS = [
-	"display_name",
+	"first_name",
+	"last_name",
+	"preferred_name",
 	"netid",
 	"uin",
 	"email",
@@ -16,12 +18,29 @@ export type BaseFieldKey = (typeof BASE_FIELD_KEYS)[number];
 
 export const BASE_FIELDS: FormFieldDef[] = [
 	{
-		key: "display_name",
-		label: "Full name",
+		key: "first_name",
+		label: "First name",
 		type: "text",
 		required: true,
+		order: -6,
+		maxLength: 60,
+	},
+	{
+		key: "last_name",
+		label: "Last name",
+		type: "text",
+		required: true,
+		order: -5,
+		maxLength: 60,
+	},
+	{
+		key: "preferred_name",
+		label: "Preferred name",
+		type: "text",
+		required: false,
 		order: -4,
-		maxLength: 120,
+		maxLength: 60,
+		helpText: "What should we call you? Leave blank to use your first name.",
 	},
 	{
 		key: "netid",
@@ -37,7 +56,9 @@ export const BASE_FIELDS: FormFieldDef[] = [
 		type: "text",
 		required: true,
 		order: -2,
+		minLength: 9,
 		maxLength: 9,
+		helpText: "9-digit University Identification Number. Leading zeros are fine.",
 	},
 	{
 		key: "email",
@@ -46,8 +67,46 @@ export const BASE_FIELDS: FormFieldDef[] = [
 		required: true,
 		order: -1,
 		maxLength: 254,
+		helpText: "Use a personal address, not a UIC / UIUC / Illinois email.",
 	},
 ];
+
+
+/**
+ * AD `Company` values for each college option. Short names match how
+ * officers create accounts by hand (e.g. Company "Engineering").
+ */
+export const COLLEGE_COMPANY: Record<string, string> = {
+	applied_health_sciences: "Applied Health Sciences",
+	architecture_design_arts: "Architecture, Design, and the Arts",
+	business_administration: "Business Administration",
+	education: "Education",
+	engineering: "Engineering",
+	honors: "Honors",
+	liberal_arts_sciences: "Liberal Arts and Sciences",
+	nursing: "Nursing",
+	pharmacy: "Pharmacy",
+	public_health: "Public Health",
+	urban_planning_public_affairs: "Urban Planning and Public Affairs",
+	teacher_education: "Teacher Education",
+	other: "Other",
+};
+
+export function companyForCollege(college: string | null | undefined): string | undefined {
+	if (!college) return undefined;
+	return COLLEGE_COMPANY[college] ?? college;
+}
+
+/** Preferred name if set, otherwise "First Last". */
+export function formatSignupDisplayName(parts: {
+	firstName: string;
+	lastName: string;
+	preferredName?: string | null;
+}): string {
+	const preferred = parts.preferredName?.trim();
+	if (preferred) return preferred;
+	return `${parts.firstName} ${parts.lastName}`.trim();
+}
 
 export interface PublishedForm {
 	schemaVersionId: string;

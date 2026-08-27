@@ -11,10 +11,11 @@ app.MapGet("/healthz", () => Results.Ok(new { status = "ok" }));
 
 app.MapPost("/users", async Task<IResult> (CreateUserRequest req, AdProvisioningService ad) =>
 {
-    if (string.IsNullOrWhiteSpace(req.Netid) || string.IsNullOrWhiteSpace(req.DisplayName)
+    if (string.IsNullOrWhiteSpace(req.Netid) || string.IsNullOrWhiteSpace(req.FirstName)
+        || string.IsNullOrWhiteSpace(req.LastName) || string.IsNullOrWhiteSpace(req.DisplayName)
         || string.IsNullOrWhiteSpace(req.Email) || string.IsNullOrWhiteSpace(req.EventId))
     {
-        return Results.BadRequest(new { error = "netid, displayName, email, and eventId are required." });
+        return Results.BadRequest(new { error = "netid, firstName, lastName, displayName, email, and eventId are required." });
     }
 
     try

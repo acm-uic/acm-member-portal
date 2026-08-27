@@ -91,6 +91,7 @@ export const DynamicField = component$<{
 					}
 					inputMode={field.type === "number" ? "numeric" : undefined}
 					placeholder={field.placeholder}
+					minLength={field.minLength}
 					maxLength={field.maxLength}
 					value={text}
 					aria-invalid={!!error}

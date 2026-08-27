@@ -12,6 +12,7 @@ import {
 	enqueueProvisioning,
 	retryDeadLetter,
 } from "~/lib/provisioning/outbox";
+import { formatSignupDisplayName } from "~/lib/forms/fields";
 
 const PAGE_SIZE = 50;
 
@@ -24,7 +25,9 @@ export const useSignupQueue = routeLoader$(async (event) => {
 	const rows = await db
 		.select({
 			id: signupSubmissions.id,
-			displayName: signupSubmissions.displayName,
+			firstName: signupSubmissions.firstName,
+			lastName: signupSubmissions.lastName,
+			preferredName: signupSubmissions.preferredName,
 			netid: signupSubmissions.netid,
 			email: signupSubmissions.email,
 			answers: signupSubmissions.answers,
@@ -36,7 +39,11 @@ export const useSignupQueue = routeLoader$(async (event) => {
 		.orderBy(desc(signupSubmissions.createdAt))
 		.limit(PAGE_SIZE);
 
-	return rows.map((r) => ({ ...r, uin: "uin" in r ? r.uin : null }));
+	return rows.map((r) => ({
+		...r,
+		displayName: formatSignupDisplayName(r),
+		uin: "uin" in r ? r.uin : null,
+	}));
 });
 
 /** Dead-letter provisioning events (officer visibility + retry). */

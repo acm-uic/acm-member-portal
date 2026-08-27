@@ -2,6 +2,9 @@ import { z } from "zod";
 import type { FormFieldDef } from "~/lib/types";
 import { BASE_FIELD_KEYS, type BaseFieldKey } from "./fields";
 
+/** Campus emails rejected for the personal-email field. */
+const CAMPUS_EMAIL_SUFFIXES = ["uic.edu", "uiuc.edu", "illinois.edu"] as const;
+
 function optionValues(field: FormFieldDef): [string, ...string[]] {
 	const values = (field.options ?? []).map((o) => o.value);
 	if (values.length === 0) {
@@ -34,18 +37,14 @@ function asStringArray(val: unknown): unknown {
 	return Array.isArray(val) ? val : [val];
 }
 
-function numberMin(field: FormFieldDef): { min: number; message: string } | null {
-	if (field.min === undefined) return null;
-	const currentYear = new Date().getFullYear();
-	const looksLikeYear = field.min >= 1900 && field.min <= currentYear + 80;
-	if (looksLikeYear) {
-		const min = Math.max(field.min, currentYear);
-		return { min, message: `${field.label} must be ${min} or a later year` };
-	}
-	return {
-		min: field.min,
-		message: `${field.label} must be at least ${field.min}`,
-	};
+function endsWithCampusDomain(email: string): boolean {
+	const lower = email.trim().toLowerCase();
+	const at = lower.lastIndexOf("@");
+	if (at < 0) return false;
+	const host = lower.slice(at + 1);
+	return CAMPUS_EMAIL_SUFFIXES.some(
+		(suffix) => host === suffix || host.endsWith(`.${suffix}`),
+	);
 }
 
 /** Compile one admin-defined field to a Zod schema (Zod v4). */
@@ -54,6 +53,17 @@ export function compileField(field: FormFieldDef): z.ZodTypeAny {
 		case "text":
 		case "textarea": {
 			let s = z.string().trim();
+			if (field.key === "uin") {
+				s = s.regex(
+					/^\d{9,}$/,
+					`${field.label} must be at least 9 digits (leading zeros are fine)`,
+				);
+			}
+			if (field.minLength !== undefined)
+				s = s.min(
+					field.minLength,
+					`${field.label} must be at least ${field.minLength} characters`,
+				);
 			if (field.maxLength)
 				s = s.max(field.maxLength, `${field.label} is too long`);
 			return field.required
@@ -61,13 +71,19 @@ export function compileField(field: FormFieldDef): z.ZodTypeAny {
 				: s.optional().or(z.literal(""));
 		}
 		case "email": {
-			const s = z.email("Enter a valid email address");
+			let s: z.ZodTypeAny = z.email("Enter a valid email address");
+			if (field.key === "email") {
+				s = s.refine(
+					(val) => typeof val !== "string" || !endsWithCampusDomain(val),
+					"Use a personal email — not one ending in uic.edu, uiuc.edu, or illinois.edu",
+				);
+			}
 			return field.required ? s : s.optional().or(z.literal(""));
 		}
 		case "number": {
 			let n = z.coerce.number<number>().int("Enter a whole number");
-			const bound = numberMin(field);
-			if (bound) n = n.min(bound.min, bound.message);
+			if (field.min !== undefined)
+				n = n.min(field.min, `${field.label} must be at least ${field.min}`);
 			if (field.max !== undefined)
 				n = n.max(field.max, `${field.label} must be at most ${field.max}`);
 			return field.required ? n : n.optional();
@@ -88,11 +104,28 @@ export function compileField(field: FormFieldDef): z.ZodTypeAny {
 	}
 }
 
-/** Compile a full form (base + dynamic) to one object schema. */
+/**
+ * Compile a full form (base + dynamic) to one object schema.
+ * Past graduation years are allowed only when Year in school is Alum.
+ */
 export function compileFormSchema(fields: FormFieldDef[]) {
 	const shape: Record<string, z.ZodTypeAny> = {};
 	for (const field of fields) shape[field.key] = compileField(field);
-	return z.object(shape);
+	return z.object(shape).superRefine((data, ctx) => {
+		if (!("grad_year" in data) || !("year_in_school" in data)) return;
+		const gradYear = data.grad_year;
+		const yearInSchool = data.year_in_school;
+		if (typeof gradYear !== "number") return;
+		if (yearInSchool === "alumni") return;
+		const currentYear = new Date().getFullYear();
+		if (gradYear < currentYear) {
+			ctx.addIssue({
+				code: "custom",
+				path: ["grad_year"],
+				message: `Expected graduation year must be ${currentYear} or a later year unless Year in school is Alum`,
+			});
+		}
+	});
 }
 
 /**

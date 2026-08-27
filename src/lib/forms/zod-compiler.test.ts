@@ -3,6 +3,8 @@ import { compileField, compileFormSchema, splitAnswers } from "./zod-compiler";
 import { BASE_FIELDS } from "./fields";
 import type { FormFieldDef } from "~/lib/types";
 
+const currentYear = new Date().getFullYear();
+
 const dynamicFields: FormFieldDef[] = [
 	{
 		key: "major",
@@ -13,12 +15,24 @@ const dynamicFields: FormFieldDef[] = [
 		maxLength: 120,
 	},
 	{
+		key: "year_in_school",
+		label: "Year in school",
+		type: "select",
+		required: true,
+		order: 3,
+		options: [
+			{ value: "freshman", label: "Freshman" },
+			{ value: "alumni", label: "Alum" },
+			{ value: "faculty", label: "Faculty" },
+		],
+	},
+	{
 		key: "grad_year",
 		label: "Expected graduation year",
 		type: "number",
 		required: true,
 		order: 4,
-		min: 2024,
+		min: 1950,
 		max: 2040,
 	},
 	{
@@ -48,12 +62,15 @@ const dynamicFields: FormFieldDef[] = [
 const schema = compileFormSchema([...BASE_FIELDS, ...dynamicFields]);
 
 const validInput = {
-	display_name: "Alex Morgan",
+	first_name: "Alex",
+	last_name: "Morgan",
+	preferred_name: "",
 	netid: "amorga42",
 	uin: "678901234",
 	email: "alex@example.com",
 	major: "Computer Science",
-	grad_year: "2028", // coerced
+	year_in_school: "freshman",
+	grad_year: String(currentYear + 2),
 	sig_interest: ["sig-ai"],
 	college: "engineering",
 };
@@ -62,7 +79,7 @@ describe("compileFormSchema", () => {
 	it("accepts a valid full submission and coerces numbers", () => {
 		const parsed = schema.safeParse(validInput);
 		expect(parsed.success).toBe(true);
-		if (parsed.success) expect(parsed.data.grad_year).toBe(2028);
+		if (parsed.success) expect(parsed.data.grad_year).toBe(currentYear + 2);
 	});
 
 	it("rejects a missing required base field", () => {
@@ -81,15 +98,50 @@ describe("compileFormSchema", () => {
 		);
 	});
 
-	it("asks for the current year or later when grad_year is too small", () => {
-		const parsed = schema.safeParse({ ...validInput, grad_year: "1" });
+	it("rejects a past grad_year for non-alum students", () => {
+		const parsed = schema.safeParse({
+			...validInput,
+			year_in_school: "freshman",
+			grad_year: String(currentYear - 1),
+		});
 		expect(parsed.success).toBe(false);
 		if (parsed.success) return;
 		const msg = parsed.error.flatten().fieldErrors.grad_year?.[0] ?? "";
-		const year = String(new Date().getFullYear());
-		expect(msg).toContain(year);
-		expect(msg).toMatch(/later year/);
-		expect(msg).not.toMatch(/too small/);
+		expect(msg).toContain(String(currentYear));
+		expect(msg).toMatch(/Alum/);
+	});
+
+	it("allows a past grad_year when Year in school is Alum", () => {
+		const parsed = schema.safeParse({
+			...validInput,
+			year_in_school: "alumni",
+			grad_year: String(currentYear - 5),
+		});
+		expect(parsed.success).toBe(true);
+	});
+
+	it("rejects a UIN shorter than 9 digits", () => {
+		expect(schema.safeParse({ ...validInput, uin: "12345678" }).success).toBe(
+			false,
+		);
+	});
+
+	it("accepts a UIN with leading zeros", () => {
+		expect(
+			schema.safeParse({ ...validInput, uin: "012345678" }).success,
+		).toBe(true);
+	});
+
+	it("rejects personal emails on campus domains", () => {
+		for (const email of [
+			"alex@uic.edu",
+			"alex@cs.uic.edu",
+			"alex@uiuc.edu",
+			"alex@illinois.edu",
+			"alex@eng.illinois.edu",
+		]) {
+			expect(schema.safeParse({ ...validInput, email }).success).toBe(false);
+		}
 	});
 
 	it("reports select errors with visible labels, not option values", () => {
@@ -176,7 +228,9 @@ describe("splitAnswers", () => {
 		const parsed = schema.parse(validInput);
 		const { base, answers } = splitAnswers(parsed);
 		expect(base).toEqual({
-			display_name: "Alex Morgan",
+			first_name: "Alex",
+			last_name: "Morgan",
+			preferred_name: "",
 			netid: "amorga42",
 			uin: "678901234",
 			email: "alex@example.com",
@@ -186,6 +240,7 @@ describe("splitAnswers", () => {
 			"grad_year",
 			"major",
 			"sig_interest",
+			"year_in_school",
 		]);
 	});
 });

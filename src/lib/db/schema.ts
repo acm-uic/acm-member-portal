@@ -155,7 +155,9 @@ export const signupSubmissions = pgTable(
 		schemaVersionId: uuid("schema_version_id")
 			.notNull()
 			.references(() => formSchemas.id),
-		displayName: text("display_name").notNull(),
+		firstName: text("first_name").notNull(),
+		lastName: text("last_name").notNull(),
+		preferredName: text("preferred_name"),
 		netid: text("netid").notNull(),
 		uin: text("uin"),
 		email: text("email").notNull(),
