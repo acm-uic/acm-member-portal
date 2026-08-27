@@ -72,9 +72,21 @@ describe("applySqlMigrations (PGlite)", () => {
 				"last_name",
 				"preferred_name",
 				"username",
+				"discord_id",
+				"discord_username",
+				"discord_in_guild",
 			]),
 		);
 		expect(cols).not.toContain("display_name");
+
+		const { rows: userCols } = await query(
+			`SELECT column_name FROM information_schema.columns
+       WHERE table_name = 'user' AND column_name LIKE 'discord%'`,
+		);
+		expect(userCols.map((r) => String(r.column_name)).sort()).toEqual([
+			"discord_id",
+			"discord_username",
+		]);
 
 		await client.close();
 	});
