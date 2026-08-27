@@ -1,9 +1,13 @@
-import { $, component$ } from "@builder.io/qwik";
-import { Link, useLocation } from "@builder.io/qwik-city";
+import { component$ } from "@builder.io/qwik";
+import {
+	Form,
+	Link,
+	useLocation,
+	type ActionStore,
+} from "@builder.io/qwik-city";
 import { ThemeToggle } from "~/components/theme-toggle";
 import {
 	DASHBOARD_VIEWS,
-	DASHBOARD_VIEW_COOKIE,
 	type DashboardView,
 } from "~/lib/dashboard/view";
 
@@ -73,6 +77,8 @@ export const Sidebar = component$<{
 	isAdmin: boolean;
 	canPreviewDashboard: boolean;
 	dashboardView: DashboardView;
+	// Action created in (member)/layout — typed loosely to avoid a layout↔sidebar cycle.
+	setDashboardView: ActionStore<unknown, { view: string }, boolean>;
 }>((props) => {
 	const loc = useLocation();
 	const initials = props.userName
@@ -81,16 +87,6 @@ export const Sidebar = component$<{
 		.slice(0, 2)
 		.join("")
 		.toUpperCase();
-
-	const onViewChange = $((view: string) => {
-		document.cookie = `${DASHBOARD_VIEW_COOKIE}=${encodeURIComponent(view)}; path=/; max-age=31536000; SameSite=Lax`;
-		const path = window.location.pathname.replace(/\/+$/, "") || "/";
-		if (path === "/dashboard") {
-			window.location.reload();
-			return;
-		}
-		window.location.assign("/dashboard");
-	});
 
 	return (
 		<aside class="w-[220px] shrink-0 self-start sticky top-0 h-screen flex flex-col px-sm py-lg border-r border-border bg-surface1">
@@ -134,25 +130,27 @@ export const Sidebar = component$<{
 			</nav>
 			<div class="mt-auto pt-md border-t border-border flex flex-col gap-sm px-sm">
 				{props.canPreviewDashboard && (
-					<label class="grid gap-2xs">
-						<span class="text-caption text-text3 uppercase tracking-wider">
-							Dashboard view
-						</span>
-						<select
-							class="w-full h-[32px] px-sm rounded-control border border-border bg-surface2 text-body-sm text-text1"
-							value={props.dashboardView}
-							onChange$={(event) => {
-								const value = (event.target as HTMLSelectElement).value;
-								onViewChange(value);
-							}}
-						>
-							{DASHBOARD_VIEWS.map((view) => (
-								<option key={view} value={view}>
-									{VIEW_LABELS[view]}
-								</option>
-							))}
-						</select>
-					</label>
+					<Form action={props.setDashboardView} class="grid gap-2xs">
+						<label class="grid gap-2xs">
+							<span class="text-caption text-text3 uppercase tracking-wider">
+								Dashboard view
+							</span>
+							<select
+								name="view"
+								class="w-full h-[32px] px-sm rounded-control border border-border bg-surface2 text-body-sm text-text1"
+								value={props.dashboardView}
+								onChange$={(_, element) => {
+									element.form?.requestSubmit();
+								}}
+							>
+								{DASHBOARD_VIEWS.map((view) => (
+									<option key={view} value={view}>
+										{VIEW_LABELS[view]}
+									</option>
+								))}
+							</select>
+						</label>
+					</Form>
 				)}
 				<ThemeToggle class="w-full" />
 				<div class="flex items-center gap-sm min-w-0">
