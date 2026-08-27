@@ -112,17 +112,21 @@ namespace-wide default-deny kept as a reference.
 ```bash
 # Zero-config local mode (no Postgres, Entra, SMTP, Discord, or Windows API):
 # boots in-process PGlite, seeds officer@localhost / local-dev, stubs mail + AD.
+<<<<<<< HEAD
 # Discord link/unlink stays hidden until DISCORD_CLIENT_ID is set.
 bun run dev          # or: npm run dev — vite on :5173
+=======
+bun run dev          # vite on :5173
+>>>>>>> 8732723 (Switch container build to bun and fix CI failures)
 # Reset local DB + stub mail: rm -rf .data
 
 # Against a real Postgres (CloudNativePG-shaped):
 # cp .env.example .env  # set DATABASE_URL + auth secrets
-npm run db:migrate   # apply drizzle/0000_initial.sql (also runs in init container)
-npm run dev
+bun run db:migrate   # apply drizzle/0000_initial.sql (also runs in init container)
+bun run dev
 
-npm run check        # tsc --noEmit
-npm test             # vitest run
+bun run check        # tsc --noEmit
+bun test             # vitest run
 ```
 
 Local credentials (embedded mode only):

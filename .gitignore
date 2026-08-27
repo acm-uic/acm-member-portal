@@ -5,6 +5,8 @@ node_modules/
 dist/
 server/
 *.tsbuildinfo
+windows-api/bin/
+windows-api/obj/
 
 # Env files (never commit secrets)
 .env

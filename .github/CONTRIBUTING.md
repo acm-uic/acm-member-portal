@@ -26,7 +26,7 @@ Qwik City on Fastify, Postgres via Drizzle, Better Auth with Microsoft Entra, an
 bun install
 ```
 
-`npm install` also works. For most UI work you can skip `.env`: `bun run dev` boots in-process PGlite. Copy `.env.example` to `.env` only when you need real Postgres, Entra, SMTP, or the Windows API.
+For most UI work you can skip `.env`: `bun run dev` boots in-process PGlite. Copy `.env.example` to `.env` only when you need real Postgres, Entra, SMTP, or the Windows API.
 
 ### Local development
 
@@ -34,17 +34,17 @@ bun install
 bun run dev
 ```
 
-Vite on :5173. `npm run check` typechecks. `npm test` runs vitest. `npm run db:migrate` applies `drizzle/0000_initial.sql` when you are not using embedded PGlite.
+Vite on :5173. `bun run check` typechecks. `bun test` runs vitest. `bun run db:migrate` applies `drizzle/0000_initial.sql` when you are not using embedded PGlite.
 
 The Windows API is not required for most UI work. See `windows-api/README.md` if you are changing AD provisioning.
 
 ### Build
 
 ```console
-npm run build
+bun run build
 ```
 
-Client plus Fastify server build. `npm run serve` runs the production server entry.
+Client plus Fastify server build. `bun run serve` runs the production server entry.
 
 ## How can I Contribute?
 
@@ -67,7 +67,7 @@ Include details about your configuration and environment:
 ### Pull Requests
 
 - Maintain code quality.
-- Make sure `npm run check` and `npm test` are happy.
+- Make sure `bun run check` and `bun test` are happy.
 - Make sure the status checks are passing.
 - Follow instructions in the pull request template.
 - We try to squash and merge PRs when we can.
