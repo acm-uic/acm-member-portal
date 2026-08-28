@@ -23,7 +23,7 @@ is returned only when a NEW account was created. It is never logged or stored.
 
 - Windows Server 2019+ with **RSAT: Active Directory module for Windows PowerShell**
   (`Install-WindowsFeature RSAT-AD-PowerShell`)
-- .NET 8 runtime (`dotnet --list-runtimes` → Microsoft.AspNetCore.App 8.x)
+- .NET 10 runtime (`dotnet --list-runtimes` → Microsoft.AspNetCore.App 10.x)
 - A service account delegated **Create/delete user objects** + **Reset user passwords**
   on the Members OU (do NOT run as Domain Admin)
 - Firewall: allow inbound 8080 (or 443 with a cert) from the k8s cluster egress only
