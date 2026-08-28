@@ -9,11 +9,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- PowerShell engine for the New-ADUser runspace. Microsoft.PowerShell.SDK
-         pulls Diagnostics/WSMan snap-ins that a web host does not need and can
-         prevent the process from reporting to SCM (error 1053). CreateDefault2()
-         does not load those snap-ins, so SMA alone is enough. -->
-    <PackageReference Include="System.Management.Automation" Version="7.6.5" />
+    <!-- LDAP/ADSI. Hosted PowerShell cannot load RSAT ActiveDirectory (SMA
+         looks for built-in modules under the publish folder, not $PSHOME). -->
+    <PackageReference Include="System.DirectoryServices" Version="10.0.11" />
     <!-- SCM lifetime so sc.exe start can handshake (error 1053 without this) -->
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.11" />
   </ItemGroup>

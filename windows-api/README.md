@@ -61,11 +61,12 @@ is `404 { samAccountName, existed: false }`. Success is
 
 ## Host requirements
 
-- Windows Server 2019+ with **RSAT: Active Directory module for Windows PowerShell**
-  (`Install-WindowsFeature RSAT-AD-PowerShell`)
+- Domain-joined Windows Server 2019+ (LDAP/ADSI, no RSAT PowerShell module)
 - .NET 10 runtime (`dotnet --list-runtimes` → Microsoft.AspNetCore.App 10.x)
-- A service account delegated **Create/delete user objects** + **Reset user passwords**
-  on the Members OU (do NOT run as Domain Admin)
+- The **Windows service account** (not your interactive admin login) delegated
+  **Create/delete user objects** + **Reset user passwords** on the Members OU
+  (do NOT run as Domain Admin). `New-ADUser` working in a PowerShell terminal
+  only proves *your* token can create users.
 - Firewall: allow inbound 2433 (or 443 with a cert) from the k8s cluster egress only
 
 ## Configuration
