@@ -1,6 +1,16 @@
 using AcmProvisioning;
+using Microsoft.Extensions.Hosting.WindowsServices;
 
-var builder = WebApplication.CreateBuilder(args);
+var options = new WebApplicationOptions
+{
+    Args = args,
+    ContentRootPath = WindowsServiceHelpers.IsWindowsService()
+        ? AppContext.BaseDirectory
+        : default
+};
+
+var builder = WebApplication.CreateBuilder(options);
+builder.Host.UseWindowsService(o => o.ServiceName = "AcmProvisioning");
 builder.Services.AddSingleton<AdProvisioningService>();
 var app = builder.Build();
 

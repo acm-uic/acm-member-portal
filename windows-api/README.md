@@ -26,7 +26,7 @@ is returned only when a NEW account was created. It is never logged or stored.
 - .NET 10 runtime (`dotnet --list-runtimes` → Microsoft.AspNetCore.App 10.x)
 - A service account delegated **Create/delete user objects** + **Reset user passwords**
   on the Members OU (do NOT run as Domain Admin)
-- Firewall: allow inbound 8080 (or 443 with a cert) from the k8s cluster egress only
+- Firewall: allow inbound 2433 (or 443 with a cert) from the k8s cluster egress only
 
 ## Configuration
 
@@ -39,17 +39,42 @@ Environment variables override `appsettings.json`:
 
 ## Deploy
 
+Publish, then register as a Windows service. The process must call into the Service
+Control Manager (`UseWindowsService` in `Program.cs`). A plain `sc.exe create` of a
+console Kestrel app will succeed, then `sc.exe start` fails with **1053** because
+SCM never receives a start callback.
+
 ```powershell
 dotnet publish -c Release -o C:\srv\acm-provisioning
-# run as a Windows service (one option):
-sc.exe create AcmProvisioning binPath= "C:\srv\acm-provisioning\AcmProvisioning.exe"
+
+# Confirm the ASP.NET Core 10 runtime is installed (framework-dependent publish):
+dotnet --list-runtimes
+# expect: Microsoft.AspNetCore.App 10.x
+
+# Recreate if an old registration exists:
+sc.exe stop AcmProvisioning
+sc.exe delete AcmProvisioning
+
+sc.exe create AcmProvisioning binPath= "C:\srv\acm-provisioning\AcmProvisioning.exe" start= auto
 sc.exe start AcmProvisioning
 ```
+
+Smoke-test the binary as a console app first if start still fails:
+
+```powershell
+C:\srv\acm-provisioning\AcmProvisioning.exe
+# should listen on http://0.0.0.0:2433; Ctrl+C to stop
+```
+
+Startup exceptions land in **Event Viewer → Windows Logs → Application**. Common
+causes of 1053 besides a missing Windows-service host: no ASP.NET Core 10 runtime,
+or the process dying before it reports `SERVICE_RUNNING` (bad `appsettings.json`
+path, port 2433 already bound).
 
 ## Verify
 
 ```powershell
-curl -H "Authorization: Bearer <token>" -X POST http://localhost:8080/users `
+curl -H "Authorization: Bearer <token>" -X POST http://localhost:2433/users `
   -H "content-type: application/json" `
   -d '{"netid":"amorga42","firstName":"Alex","lastName":"Morgan","preferredName":"Alex","displayName":"Alex","email":"alex@example.com","uin":"678901234","department":"Computer Science","company":"Engineering","eventId":"<uuid>"}'
 # → { "samAccountName": "amorga42", "existed": false, "oneTimePassword": "…" }
