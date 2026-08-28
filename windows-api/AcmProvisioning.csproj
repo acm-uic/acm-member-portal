@@ -9,8 +9,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- PowerShell SDK for the New-ADUser runspace -->
-    <PackageReference Include="System.Management.Automation" Version="7.6.5" />
+    <!-- Engine + command assemblies. System.Management.Automation alone
+         omits Microsoft.PowerShell.Commands.Diagnostics.dll and friends. -->
+    <PackageReference Include="Microsoft.PowerShell.SDK" Version="7.6.5" />
     <!-- SCM lifetime so sc.exe start can handshake (error 1053 without this) -->
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.11" />
   </ItemGroup>

@@ -85,7 +85,7 @@ console Kestrel app will succeed, then `sc.exe start` fails with **1053** becaus
 SCM never receives a start callback.
 
 ```powershell
-dotnet publish -c Release -o C:\srv\acm-provisioning
+dotnet publish -c Release -r win-x64 --self-contained false -o C:\srv\acm-provisioning
 
 # Confirm the ASP.NET Core 10 runtime is installed (framework-dependent publish):
 dotnet --list-runtimes

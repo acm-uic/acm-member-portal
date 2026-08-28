@@ -58,13 +58,89 @@ public sealed class AdProvisioningService
 
     private static PowerShell CreateShell(out Runspace runspace)
     {
-        var iss = InitialSessionState.CreateDefault();
-        iss.ImportPSModule(new[] { "ActiveDirectory" });
+        // CreateDefault() loads snap-ins (Diagnostics, WSMan, …) from
+        // runtimes/win/lib/netX.0/, which a framework-dependent publish does
+        // not copy. CreateDefault2() is the core engine only (Import-Module).
+        var iss = InitialSessionState.CreateDefault2();
+        iss.ExecutionPolicy = Microsoft.PowerShell.ExecutionPolicy.Bypass;
+        iss.ThrowOnRunspaceOpenError = true;
+
+        // Windows services often have a stripped PSModulePath; RSAT lives here.
+        var systemModules = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.System),
+            "WindowsPowerShell", "v1.0", "Modules");
+        var modulePath = Environment.GetEnvironmentVariable("PSModulePath") ?? "";
+        if (modulePath.IndexOf(systemModules, StringComparison.OrdinalIgnoreCase) < 0)
+        {
+            modulePath = string.IsNullOrEmpty(modulePath)
+                ? systemModules
+                : modulePath + Path.PathSeparator + systemModules;
+        }
+        iss.EnvironmentVariables.Add(new SessionStateVariableEntry("PSModulePath", modulePath, ""));
+
         runspace = RunspaceFactory.CreateRunspace(iss);
-        runspace.Open();
+        try
+        {
+            runspace.Open();
+        }
+        catch (Exception ex)
+        {
+            runspace.Dispose();
+            throw new ProvisioningException($"Failed to open PowerShell runspace: {AdErrors.Format(ex)}");
+        }
+
         var ps = PowerShell.Create();
         ps.Runspace = runspace;
+        try
+        {
+            ImportActiveDirectory(ps);
+        }
+        catch
+        {
+            ps.Dispose();
+            runspace.Dispose();
+            throw;
+        }
         return ps;
+    }
+
+    private static void ImportActiveDirectory(PowerShell ps)
+    {
+        string? last = null;
+        if (TryImportActiveDirectory(ps, winPsRemoting: false, out last)) return;
+        if (TryImportActiveDirectory(ps, winPsRemoting: true, out last)) return;
+        throw new ProvisioningException(
+            "Could not load the ActiveDirectory PowerShell module. " +
+            "Install RSAT-AD-PowerShell (Install-WindowsFeature RSAT-AD-PowerShell). " +
+            (last ?? ""));
+    }
+
+    private static bool TryImportActiveDirectory(PowerShell ps, bool winPsRemoting, out string? error)
+    {
+        ps.Commands.Clear();
+        ps.Streams.Error.Clear();
+        ps.AddCommand("Import-Module")
+          .AddParameter("Name", "ActiveDirectory")
+          .AddParameter("ErrorAction", ActionPreference.Stop);
+        if (winPsRemoting) ps.AddParameter("UseWindowsPowerShell", true);
+        else ps.AddParameter("SkipEditionCheck", true);
+
+        try
+        {
+            ps.Invoke();
+            error = ps.HadErrors ? FormatPsErrors(ps) : null;
+            var ok = !ps.HadErrors;
+            ps.Commands.Clear();
+            ps.Streams.Error.Clear();
+            return ok;
+        }
+        catch (Exception ex)
+        {
+            error = AdErrors.Format(ex);
+            ps.Commands.Clear();
+            ps.Streams.Error.Clear();
+            return false;
+        }
     }
 
     public async Task<bool> UserExistsAsync(string samAccountName)
@@ -77,7 +153,7 @@ public sealed class AdProvisioningService
               .AddParameter("Properties", "sAMAccountName");
             if (HasExplicitDc) ps.AddParameter("Server", _domainController);
 
-            var results = await ps.InvokeAsync();
+            var results = await InvokeCommandAsync(ps, "Get-ADUser");
             return results.Count > 0;
         }
     }
@@ -118,18 +194,28 @@ public sealed class AdProvisioningService
             if (!string.IsNullOrWhiteSpace(req.Company)) ps.AddParameter("Company", req.Company);
             if (HasExplicitDc) ps.AddParameter("Server", _domainController);
 
-            await ps.InvokeAsync();
+            try
+            {
+                await ps.InvokeAsync();
+            }
+            catch (Exception ex)
+            {
+                if (await UserExistsAsync(accountName))
+                {
+                    return new CreateUserResponse(accountName, true, null);
+                }
+                throw new ProvisioningException($"New-ADUser failed: {AdErrors.Format(ex)}{ErrorSuffix(ps)}");
+            }
 
             if (ps.HadErrors)
             {
-                var errors = string.Join("; ", ps.Streams.Error.Select(e => e.ToString()));
                 // A create that lost the race (or a replay after a crash between
                 // create and response) is still idempotent success.
                 if (await UserExistsAsync(accountName))
                 {
                     return new CreateUserResponse(accountName, true, null);
                 }
-                throw new ProvisioningException($"New-ADUser failed: {errors}");
+                throw new ProvisioningException($"New-ADUser failed:{ErrorSuffix(ps)}");
             }
 
             return new CreateUserResponse(accountName, false, password);
@@ -168,17 +254,38 @@ public sealed class AdProvisioningService
             }
             if (HasExplicitDc) ps.AddParameter("Server", _domainController);
 
-            await ps.InvokeAsync();
-
-            if (ps.HadErrors)
-            {
-                var errors = string.Join("; ", ps.Streams.Error.Select(e => e.ToString()));
-                throw new ProvisioningException($"Set-ADUser failed: {errors}");
-            }
+            await InvokeCommandAsync(ps, "Set-ADUser");
 
             return new CreateUserResponse(newSam, true, null);
         }
     }
+
+    private static async Task<PSDataCollection<PSObject>> InvokeCommandAsync(PowerShell ps, string command)
+    {
+        try
+        {
+            var results = await ps.InvokeAsync();
+            if (ps.HadErrors)
+            {
+                throw new ProvisioningException($"{command} failed: {FormatPsErrors(ps)}");
+            }
+            return results;
+        }
+        catch (ProvisioningException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            throw new ProvisioningException($"{command} failed: {AdErrors.Format(ex)}{ErrorSuffix(ps)}");
+        }
+    }
+
+    private static string ErrorSuffix(PowerShell ps) =>
+        ps.HadErrors ? " " + FormatPsErrors(ps) : "";
+
+    private static string FormatPsErrors(PowerShell ps) =>
+        string.Join("; ", ps.Streams.Error.Select(e => e.Exception?.Message ?? e.ToString()));
 
     private static SecureString ToSecureString(string value)
     {
@@ -206,5 +313,21 @@ public sealed class AdProvisioningService
         return new string(array);
 
         static char Pick(string pool) => pool[RandomNumberGenerator.GetInt32(pool.Length)];
+    }
+}
+
+internal static class AdErrors
+{
+    public static string Format(Exception ex)
+    {
+        var parts = new List<string>();
+        for (var e = ex; e != null; e = e.InnerException)
+        {
+            if (!string.IsNullOrWhiteSpace(e.Message) && (parts.Count == 0 || parts[^1] != e.Message))
+            {
+                parts.Add(e.Message);
+            }
+        }
+        return parts.Count == 0 ? ex.GetType().Name : string.Join(" | ", parts);
     }
 }

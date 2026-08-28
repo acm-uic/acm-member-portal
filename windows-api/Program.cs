@@ -1,4 +1,5 @@
 using AcmProvisioning;
+using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.Extensions.Hosting.WindowsServices;
 
 var options = new WebApplicationOptions
@@ -13,6 +14,26 @@ var builder = WebApplication.CreateBuilder(options);
 builder.Host.UseWindowsService(o => o.ServiceName = "AcmProvisioning");
 builder.Services.AddSingleton<AdProvisioningService>();
 var app = builder.Build();
+
+// Production Kestrel otherwise answers unhandled exceptions with 500 and no body.
+app.UseExceptionHandler(errorApp =>
+{
+    errorApp.Run(async context =>
+    {
+        var err = context.Features.Get<IExceptionHandlerFeature>()?.Error;
+        if (err is not null)
+        {
+            context.RequestServices.GetRequiredService<ILoggerFactory>()
+                .CreateLogger("AcmProvisioning")
+                .LogError(err, "Unhandled exception");
+        }
+        context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+        await context.Response.WriteAsJsonAsync(new
+        {
+            error = err is null ? "internal error" : AdErrors.Format(err)
+        });
+    });
+});
 
 // Bearer token on everything except /healthz
 app.UseMiddleware<TokenAuthMiddleware>();
@@ -34,9 +55,9 @@ app.MapPost("/users", async Task<IResult> (CreateUserRequest req, AdProvisioning
         var result = await ad.CreateUserAsync(req);
         return Results.Ok(result);
     }
-    catch (ProvisioningException ex)
+    catch (Exception ex)
     {
-        return Results.Problem(ex.Message, statusCode: 502);
+        return AdFailure(ex);
     }
 });
 
@@ -56,18 +77,32 @@ app.MapPatch("/users/{sam}", async Task<IResult> (string sam, UpdateUserRequest 
     {
         return Results.NotFound(new { samAccountName = sam, existed = false });
     }
-    catch (ProvisioningException ex)
+    catch (Exception ex)
     {
-        return Results.Problem(ex.Message, statusCode: 502);
+        return AdFailure(ex);
     }
 });
 
 app.MapGet("/users/{sam}", async Task<IResult> (string sam, AdProvisioningService ad) =>
 {
-    var exists = await ad.UserExistsAsync(sam);
-    return exists
-        ? Results.Ok(new { samAccountName = sam, existed = true })
-        : Results.NotFound(new { samAccountName = sam, existed = false });
+    try
+    {
+        var exists = await ad.UserExistsAsync(sam);
+        return exists
+            ? Results.Ok(new { samAccountName = sam, existed = true })
+            : Results.NotFound(new { samAccountName = sam, existed = false });
+    }
+    catch (Exception ex)
+    {
+        return AdFailure(ex);
+    }
 });
 
 app.Run();
+
+static IResult AdFailure(Exception ex) =>
+    Results.Json(
+        new { error = AdErrors.Format(ex) },
+        statusCode: ex is ProvisioningException
+            ? StatusCodes.Status502BadGateway
+            : StatusCodes.Status500InternalServerError);
