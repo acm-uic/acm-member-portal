@@ -134,13 +134,26 @@ export const useUnlinkDiscord = routeAction$(async (_data, event) => {
   const session = event.sharedMap.get("session") as PortalSession | null;
   if (!session?.user) throw event.redirect(302, "/login");
 
-  try {
-    await auth.api.unlinkAccount({
-      body: { providerId: DISCORD_PROVIDER_ID },
-      headers: event.request.headers,
-    });
-  } catch {
-    // Local row may exist without a Better Auth link (copied from signup).
+  const [discordAccount] = await db
+    .select({ id: account.id })
+    .from(account)
+    .where(
+      and(
+        eq(account.userId, session.user.id),
+        eq(account.providerId, DISCORD_PROVIDER_ID),
+      ),
+    )
+    .limit(1);
+
+  if (discordAccount) {
+    try {
+      await auth.api.unlinkAccount({
+        body: { accountId: discordAccount.id },
+        headers: event.request.headers,
+      });
+    } catch {
+      // Local row may exist without a Better Auth link (copied from signup).
+    }
   }
 
   await db.transaction(async (tx) => {

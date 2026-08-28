@@ -2,7 +2,7 @@ import { nodeServerAdapter } from "@builder.io/qwik-city/adapters/node-server/vi
 import { extendConfig } from "@builder.io/qwik-city/vite";
 import baseConfig from "../../vite.config";
 
-export default extendConfig(baseConfig, () => ({
+export default extendConfig(baseConfig as Parameters<typeof extendConfig>[0], () => ({
 	build: {
 		ssr: true,
 		rollupOptions: { input: ["src/entry.fastify.tsx", "@qwik-city-plan"] },
