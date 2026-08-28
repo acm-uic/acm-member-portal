@@ -2,16 +2,31 @@ using AcmProvisioning;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.Extensions.Hosting.WindowsServices;
 
+const string ServiceFlag = "--windows-service";
+var asService = args.Any(a => string.Equals(a, ServiceFlag, StringComparison.OrdinalIgnoreCase))
+    || WindowsServiceHelpers.IsWindowsService();
+var hostArgs = args.Where(a => !string.Equals(a, ServiceFlag, StringComparison.OrdinalIgnoreCase)).ToArray();
+
+BootLog($"pid={Environment.ProcessId} asService={asService} parentDetect={WindowsServiceHelpers.IsWindowsService()} cwd={Environment.CurrentDirectory} base={AppContext.BaseDirectory} args={string.Join(' ', args)}");
+
 var options = new WebApplicationOptions
 {
-    Args = args,
-    ContentRootPath = WindowsServiceHelpers.IsWindowsService()
-        ? AppContext.BaseDirectory
-        : default
+    Args = hostArgs,
+    ContentRootPath = asService ? AppContext.BaseDirectory : default
 };
 
 var builder = WebApplication.CreateBuilder(options);
-builder.Host.UseWindowsService(o => o.ServiceName = "AcmProvisioning");
+if (asService)
+{
+    // AddWindowsService() is a no-op when parent-process detection fails (RID
+    // apphost, some SCM hosts). Register the lifetime ourselves in that case.
+    builder.Services.AddWindowsService(o => o.ServiceName = "AcmProvisioning");
+    if (!WindowsServiceHelpers.IsWindowsService())
+    {
+        builder.Services.AddSingleton<IHostLifetime, WindowsServiceLifetime>();
+        builder.Services.Configure<WindowsServiceLifetimeOptions>(o => o.ServiceName = "AcmProvisioning");
+    }
+}
 builder.Services.AddSingleton<AdProvisioningService>();
 var app = builder.Build();
 
@@ -98,7 +113,23 @@ app.MapGet("/users/{sam}", async Task<IResult> (string sam, AdProvisioningServic
     }
 });
 
-app.Run();
+try
+{
+    app.Run();
+}
+catch (Exception ex)
+{
+    BootLog(ex.ToString());
+    try
+    {
+        File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "startup-error.log"), $"{DateTime.UtcNow:o}{Environment.NewLine}{ex}");
+    }
+    catch
+    {
+        // best-effort; SCM has no console
+    }
+    throw;
+}
 
 static IResult AdFailure(Exception ex) =>
     Results.Json(
@@ -106,3 +137,17 @@ static IResult AdFailure(Exception ex) =>
         statusCode: ex is ProvisioningException
             ? StatusCodes.Status502BadGateway
             : StatusCodes.Status500InternalServerError);
+
+static void BootLog(string message)
+{
+    try
+    {
+        File.AppendAllText(
+            Path.Combine(AppContext.BaseDirectory, "service-boot.log"),
+            $"{DateTime.UtcNow:o} {message}{Environment.NewLine}");
+    }
+    catch
+    {
+        // best-effort; SCM has no console
+    }
+}

@@ -95,7 +95,7 @@ jobs:
 
       - name: Publish
         working-directory: windows-api
-        run: dotnet publish -c Release -r win-x64 --self-contained false -o "${{ runner.temp }}/acm-provisioning"
+        run: dotnet publish -c Release -o "${{ runner.temp }}/acm-provisioning"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

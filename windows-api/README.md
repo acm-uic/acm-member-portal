@@ -79,13 +79,12 @@ Environment variables override `appsettings.json`:
 
 ## Deploy
 
-Publish, then register as a Windows service. The process must call into the Service
-Control Manager (`UseWindowsService` in `Program.cs`). A plain `sc.exe create` of a
-console Kestrel app will succeed, then `sc.exe start` fails with **1053** because
-SCM never receives a start callback.
+Publish, then register as a Windows service. `binPath` must include `--windows-service`
+so the process reports to SCM. A console Kestrel app will `sc.exe create` successfully,
+then `sc.exe start` fails with **1053**.
 
 ```powershell
-dotnet publish -c Release -r win-x64 --self-contained false -o C:\srv\acm-provisioning
+dotnet publish -c Release -o C:\srv\acm-provisioning
 
 # Confirm the ASP.NET Core 10 runtime is installed (framework-dependent publish):
 dotnet --list-runtimes
@@ -95,21 +94,24 @@ dotnet --list-runtimes
 sc.exe stop AcmProvisioning
 sc.exe delete AcmProvisioning
 
-sc.exe create AcmProvisioning binPath= "C:\srv\acm-provisioning\AcmProvisioning.exe" start= auto
+# --windows-service forces SCM lifetime even when parent-process detection fails
+sc.exe create AcmProvisioning binPath= "C:\srv\acm-provisioning\AcmProvisioning.exe --windows-service" start= auto
 sc.exe start AcmProvisioning
 ```
 
-Smoke-test the binary as a console app first if start still fails:
+Smoke-test the binary as a console app first if start still fails (omit `--windows-service`):
 
 ```powershell
 C:\srv\acm-provisioning\AcmProvisioning.exe
 # should listen on http://0.0.0.0:2433; Ctrl+C to stop
 ```
 
-Startup exceptions land in **Event Viewer → Windows Logs → Application**. Common
-causes of 1053 besides a missing Windows-service host: no ASP.NET Core 10 runtime,
-or the process dying before it reports `SERVICE_RUNNING` (bad `appsettings.json`
-path, port 2433 already bound).
+If `sc.exe start` still returns 1053, check `C:\srv\acm-provisioning\service-boot.log` and
+`startup-error.log`. Startup exceptions also land in **Event Viewer → Windows Logs → Application**.
+Do not publish with `Microsoft.PowerShell.SDK` or `-r win-x64`; those have prevented the
+process from reporting to SCM. Common remaining causes: no ASP.NET Core 10 runtime,
+or the process dying before it reports `SERVICE_RUNNING` (bad `appsettings.json` path,
+port 2433 already bound).
 
 ## Verify
 
