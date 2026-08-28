@@ -1,18 +1,54 @@
 using AcmProvisioning;
+using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.Extensions.Hosting.WindowsServices;
+
+const string ServiceFlag = "--windows-service";
+var asService = args.Any(a => string.Equals(a, ServiceFlag, StringComparison.OrdinalIgnoreCase))
+    || WindowsServiceHelpers.IsWindowsService();
+var hostArgs = args.Where(a => !string.Equals(a, ServiceFlag, StringComparison.OrdinalIgnoreCase)).ToArray();
+
+BootLog($"pid={Environment.ProcessId} asService={asService} parentDetect={WindowsServiceHelpers.IsWindowsService()} cwd={Environment.CurrentDirectory} base={AppContext.BaseDirectory} args={string.Join(' ', args)}");
 
 var options = new WebApplicationOptions
 {
-    Args = args,
-    ContentRootPath = WindowsServiceHelpers.IsWindowsService()
-        ? AppContext.BaseDirectory
-        : default
+    Args = hostArgs,
+    ContentRootPath = asService ? AppContext.BaseDirectory : default
 };
 
 var builder = WebApplication.CreateBuilder(options);
-builder.Host.UseWindowsService(o => o.ServiceName = "AcmProvisioning");
+if (asService)
+{
+    // AddWindowsService() is a no-op when parent-process detection fails (RID
+    // apphost, some SCM hosts). Register the lifetime ourselves in that case.
+    builder.Services.AddWindowsService(o => o.ServiceName = "AcmProvisioning");
+    if (!WindowsServiceHelpers.IsWindowsService())
+    {
+        builder.Services.AddSingleton<IHostLifetime, WindowsServiceLifetime>();
+        builder.Services.Configure<WindowsServiceLifetimeOptions>(o => o.ServiceName = "AcmProvisioning");
+    }
+}
 builder.Services.AddSingleton<AdProvisioningService>();
 var app = builder.Build();
+
+// Production Kestrel otherwise answers unhandled exceptions with 500 and no body.
+app.UseExceptionHandler(errorApp =>
+{
+    errorApp.Run(async context =>
+    {
+        var err = context.Features.Get<IExceptionHandlerFeature>()?.Error;
+        if (err is not null)
+        {
+            context.RequestServices.GetRequiredService<ILoggerFactory>()
+                .CreateLogger("AcmProvisioning")
+                .LogError(err, "Unhandled exception");
+        }
+        context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+        await context.Response.WriteAsJsonAsync(new
+        {
+            error = err is null ? "internal error" : AdErrors.Format(err)
+        });
+    });
+});
 
 // Bearer token on everything except /healthz
 app.UseMiddleware<TokenAuthMiddleware>();
@@ -34,9 +70,9 @@ app.MapPost("/users", async Task<IResult> (CreateUserRequest req, AdProvisioning
         var result = await ad.CreateUserAsync(req);
         return Results.Ok(result);
     }
-    catch (ProvisioningException ex)
+    catch (Exception ex)
     {
-        return Results.Problem(ex.Message, statusCode: 502);
+        return AdFailure(ex);
     }
 });
 
@@ -56,18 +92,62 @@ app.MapPatch("/users/{sam}", async Task<IResult> (string sam, UpdateUserRequest 
     {
         return Results.NotFound(new { samAccountName = sam, existed = false });
     }
-    catch (ProvisioningException ex)
+    catch (Exception ex)
     {
-        return Results.Problem(ex.Message, statusCode: 502);
+        return AdFailure(ex);
     }
 });
 
 app.MapGet("/users/{sam}", async Task<IResult> (string sam, AdProvisioningService ad) =>
 {
-    var exists = await ad.UserExistsAsync(sam);
-    return exists
-        ? Results.Ok(new { samAccountName = sam, existed = true })
-        : Results.NotFound(new { samAccountName = sam, existed = false });
+    try
+    {
+        var exists = await ad.UserExistsAsync(sam);
+        return exists
+            ? Results.Ok(new { samAccountName = sam, existed = true })
+            : Results.NotFound(new { samAccountName = sam, existed = false });
+    }
+    catch (Exception ex)
+    {
+        return AdFailure(ex);
+    }
 });
 
-app.Run();
+try
+{
+    app.Run();
+}
+catch (Exception ex)
+{
+    BootLog(ex.ToString());
+    try
+    {
+        File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "startup-error.log"), $"{DateTime.UtcNow:o}{Environment.NewLine}{ex}");
+    }
+    catch
+    {
+        // best-effort; SCM has no console
+    }
+    throw;
+}
+
+static IResult AdFailure(Exception ex) =>
+    Results.Json(
+        new { error = AdErrors.Format(ex) },
+        statusCode: ex is ProvisioningException
+            ? StatusCodes.Status502BadGateway
+            : StatusCodes.Status500InternalServerError);
+
+static void BootLog(string message)
+{
+    try
+    {
+        File.AppendAllText(
+            Path.Combine(AppContext.BaseDirectory, "service-boot.log"),
+            $"{DateTime.UtcNow:o} {message}{Environment.NewLine}");
+    }
+    catch
+    {
+        // best-effort; SCM has no console
+    }
+}

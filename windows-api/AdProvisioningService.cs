@@ -1,7 +1,7 @@
-using System.Management.Automation;
-using System.Management.Automation.Runspaces;
-using System.Security;
+using System.DirectoryServices;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using System.Text;
 
 namespace AcmProvisioning;
 
@@ -36,13 +36,18 @@ public record CreateUserResponse(string SamAccountName, bool Existed, string? On
 public class ProvisioningException(string message) : Exception(message);
 
 /// <summary>
-/// Wraps the ActiveDirectory PowerShell module. Every invocation is
-/// parameter-based (no string interpolation into script text), so netids
-/// cannot inject PowerShell. Idempotent on sAMAccountName: replay returns
-/// Existed=true with no password (research decision).
+/// LDAP/ADSI (System.DirectoryServices). A hosted PowerShell runspace cannot
+/// load RSAT's ActiveDirectory module: SMA looks for built-in modules under
+/// the publish folder, not $PSHOME. Idempotent on sAMAccountName: replay
+/// returns Existed=true with no password.
 /// </summary>
 public sealed class AdProvisioningService
 {
+    // ADS_UF_NORMAL_ACCOUNT | ACCOUNTDISABLE | PASSWD_NOTREQD — password is
+    // set in a second commit, so the account is created disabled first.
+    private const int UacCreateDisabled = 0x200 | 0x002 | 0x020;
+    private const int UacEnabled = 0x200;
+
     private readonly string _upnSuffix;
     private readonly string _usersOu;
     private readonly string? _domainController;
@@ -56,135 +61,165 @@ public sealed class AdProvisioningService
 
     private bool HasExplicitDc => !string.IsNullOrWhiteSpace(_domainController);
 
-    private static PowerShell CreateShell(out Runspace runspace)
-    {
-        var iss = InitialSessionState.CreateDefault();
-        iss.ImportPSModule(new[] { "ActiveDirectory" });
-        runspace = RunspaceFactory.CreateRunspace(iss);
-        runspace.Open();
-        var ps = PowerShell.Create();
-        ps.Runspace = runspace;
-        return ps;
-    }
+    private string UsersLdapPath => HasExplicitDc
+        ? $"LDAP://{_domainController}/{_usersOu}"
+        : $"LDAP://{_usersOu}";
 
-    public async Task<bool> UserExistsAsync(string samAccountName)
-    {
-        using var ps = CreateShell(out var runspace);
-        using (runspace)
+    public Task<bool> UserExistsAsync(string samAccountName) =>
+        Task.Run(() =>
         {
-            ps.AddCommand("Get-ADUser")
-              .AddParameter("Filter", $"sAMAccountName -eq '{samAccountName.Replace("'", "''")}'")
-              .AddParameter("Properties", "sAMAccountName");
-            if (HasExplicitDc) ps.AddParameter("Server", _domainController);
-
-            var results = await ps.InvokeAsync();
-            return results.Count > 0;
-        }
-    }
-
-    public async Task<CreateUserResponse> CreateUserAsync(CreateUserRequest req)
-    {
-        var accountName = req.AccountName;
-        if (await UserExistsAsync(accountName))
-        {
-            return new CreateUserResponse(accountName, true, null);
-        }
-
-        var password = GeneratePassword();
-
-        using var ps = CreateShell(out var runspace);
-        using (runspace)
-        {
-            // Name/CN: "First Last" (matches manual New-ADUser)
-            // DisplayName: preferred name when set, else "First Last"
-            // GivenName/Surname: legal first/last
-            // sAMAccountName / UserPrincipalName: signup Username
-            // EmployeeID: UIN; Department: major; Company: college
-            var legalName = $"{req.FirstName} {req.LastName}".Trim();
-            ps.AddCommand("New-ADUser")
-              .AddParameter("Name", legalName)
-              .AddParameter("DisplayName", req.DisplayName)
-              .AddParameter("GivenName", req.FirstName)
-              .AddParameter("Surname", req.LastName)
-              .AddParameter("SamAccountName", accountName)
-              .AddParameter("UserPrincipalName", $"{accountName}@{_upnSuffix}")
-              .AddParameter("EmailAddress", req.Email)
-              .AddParameter("AccountPassword", ToSecureString(password))
-              .AddParameter("Enabled", true)
-              .AddParameter("ChangePasswordAtLogon", true)
-              .AddParameter("Path", _usersOu);
-            if (!string.IsNullOrWhiteSpace(req.Uin)) ps.AddParameter("EmployeeID", req.Uin);
-            if (!string.IsNullOrWhiteSpace(req.Department)) ps.AddParameter("Department", req.Department);
-            if (!string.IsNullOrWhiteSpace(req.Company)) ps.AddParameter("Company", req.Company);
-            if (HasExplicitDc) ps.AddParameter("Server", _domainController);
-
-            await ps.InvokeAsync();
-
-            if (ps.HadErrors)
+            try
             {
-                var errors = string.Join("; ", ps.Streams.Error.Select(e => e.ToString()));
-                // A create that lost the race (or a replay after a crash between
-                // create and response) is still idempotent success.
-                if (await UserExistsAsync(accountName))
-                {
-                    return new CreateUserResponse(accountName, true, null);
-                }
-                throw new ProvisioningException($"New-ADUser failed: {errors}");
+                using var user = FindUser(samAccountName);
+                return user is not null;
             }
+            catch (Exception ex) when (ex is not ProvisioningException)
+            {
+                throw new ProvisioningException($"AD lookup failed: {AdErrors.Format(ex)}");
+            }
+        });
 
-            return new CreateUserResponse(accountName, false, password);
-        }
+    public Task<CreateUserResponse> CreateUserAsync(CreateUserRequest req) =>
+        Task.Run(() =>
+        {
+            var accountName = req.AccountName;
+            try
+            {
+                using (var existing = FindUser(accountName))
+                {
+                    if (existing is not null)
+                    {
+                        return new CreateUserResponse(accountName, true, null);
+                    }
+                }
+
+                var password = GeneratePassword();
+                var legalName = $"{req.FirstName} {req.LastName}".Trim();
+
+                using var ou = new DirectoryEntry(UsersLdapPath);
+                using var user = ou.Children.Add($"CN={EscapeDn(legalName)}", "user");
+                user.Properties["sAMAccountName"].Value = accountName;
+                user.Properties["userPrincipalName"].Value = $"{accountName}@{_upnSuffix}";
+                user.Properties["givenName"].Value = req.FirstName;
+                user.Properties["sn"].Value = req.LastName;
+                user.Properties["displayName"].Value = req.DisplayName;
+                user.Properties["mail"].Value = req.Email;
+                if (!string.IsNullOrWhiteSpace(req.Uin)) user.Properties["employeeID"].Value = req.Uin;
+                if (!string.IsNullOrWhiteSpace(req.Department)) user.Properties["department"].Value = req.Department;
+                if (!string.IsNullOrWhiteSpace(req.Company)) user.Properties["company"].Value = req.Company;
+                user.Properties["userAccountControl"].Value = UacCreateDisabled;
+                user.CommitChanges();
+
+                user.Invoke("SetPassword", password);
+                user.Properties["userAccountControl"].Value = UacEnabled;
+                user.Properties["pwdLastSet"].Value = 0;
+                user.CommitChanges();
+
+                return new CreateUserResponse(accountName, false, password);
+            }
+            catch (Exception ex) when (ex is not ProvisioningException)
+            {
+                try
+                {
+                    using var raced = FindUser(accountName);
+                    if (raced is not null)
+                    {
+                        return new CreateUserResponse(accountName, true, null);
+                    }
+                }
+                catch
+                {
+                    // surface the original create failure
+                }
+                throw new ProvisioningException($"AD create failed: {AdErrors.Format(ex)}");
+            }
+        });
+
+    public Task<CreateUserResponse> UpdateUserAsync(string currentSam, UpdateUserRequest req) =>
+        Task.Run(() =>
+        {
+            try
+            {
+                using var user = FindUser(currentSam);
+                if (user is null)
+                {
+                    throw new ProvisioningException($"AD user '{currentSam}' was not found.");
+                }
+
+                var newSam = string.IsNullOrWhiteSpace(req.Username)
+                    ? currentSam
+                    : req.Username!.Trim();
+
+                if (!string.IsNullOrWhiteSpace(req.FirstName)) user.Properties["givenName"].Value = req.FirstName;
+                if (!string.IsNullOrWhiteSpace(req.LastName)) user.Properties["sn"].Value = req.LastName;
+                if (!string.IsNullOrWhiteSpace(req.DisplayName)) user.Properties["displayName"].Value = req.DisplayName;
+                if (!string.IsNullOrWhiteSpace(req.Email)) user.Properties["mail"].Value = req.Email;
+                if (!string.IsNullOrWhiteSpace(req.Uin)) user.Properties["employeeID"].Value = req.Uin;
+                user.Properties["sAMAccountName"].Value = newSam;
+                user.Properties["userPrincipalName"].Value = $"{newSam}@{_upnSuffix}";
+                user.CommitChanges();
+
+                return new CreateUserResponse(newSam, true, null);
+            }
+            catch (Exception ex) when (ex is not ProvisioningException)
+            {
+                throw new ProvisioningException($"AD update failed: {AdErrors.Format(ex)}");
+            }
+        });
+
+    private DirectoryEntry? FindUser(string samAccountName)
+    {
+        using var root = new DirectoryEntry(UsersLdapPath);
+        using var searcher = new DirectorySearcher(root)
+        {
+            Filter = $"(&(objectCategory=person)(objectClass=user)(sAMAccountName={EscapeFilter(samAccountName)}))",
+            SearchScope = SearchScope.Subtree,
+        };
+        searcher.PropertiesToLoad.Add("distinguishedName");
+        var result = searcher.FindOne();
+        return result?.GetDirectoryEntry();
     }
 
-    public async Task<CreateUserResponse> UpdateUserAsync(string currentSam, UpdateUserRequest req)
+    /// <summary>RFC 4515 LDAP filter escape.</summary>
+    private static string EscapeFilter(string value)
     {
-        if (!await UserExistsAsync(currentSam))
+        var sb = new StringBuilder(value.Length);
+        foreach (var c in value)
         {
-            throw new ProvisioningException($"AD user '{currentSam}' was not found.");
-        }
-
-        var newSam = string.IsNullOrWhiteSpace(req.Username)
-            ? currentSam
-            : req.Username!.Trim();
-
-        using var ps = CreateShell(out var runspace);
-        using (runspace)
-        {
-            ps.AddCommand("Set-ADUser")
-              .AddParameter("Identity", currentSam);
-            if (!string.IsNullOrWhiteSpace(req.FirstName)) ps.AddParameter("GivenName", req.FirstName);
-            if (!string.IsNullOrWhiteSpace(req.LastName)) ps.AddParameter("Surname", req.LastName);
-            if (!string.IsNullOrWhiteSpace(req.DisplayName)) ps.AddParameter("DisplayName", req.DisplayName);
-            if (!string.IsNullOrWhiteSpace(req.Email)) ps.AddParameter("EmailAddress", req.Email);
-            if (!string.IsNullOrWhiteSpace(req.Uin)) ps.AddParameter("EmployeeID", req.Uin);
-            if (!string.Equals(newSam, currentSam, StringComparison.OrdinalIgnoreCase))
+            switch (c)
             {
-                ps.AddParameter("SamAccountName", newSam);
-                ps.AddParameter("UserPrincipalName", $"{newSam}@{_upnSuffix}");
+                case '\\': sb.Append("\\5c"); break;
+                case '*': sb.Append("\\2a"); break;
+                case '(': sb.Append("\\28"); break;
+                case ')': sb.Append("\\29"); break;
+                case '\0': sb.Append("\\00"); break;
+                default: sb.Append(c); break;
+            }
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>RFC 4514 DN attribute-value escape for a CN RDN.</summary>
+    private static string EscapeDn(string value)
+    {
+        if (value.Length == 0) return value;
+        var sb = new StringBuilder(value.Length + 8);
+        for (var i = 0; i < value.Length; i++)
+        {
+            var c = value[i];
+            var edge = i == 0 || i == value.Length - 1;
+            if (c is ',' or '+' or '"' or '\\' or '<' or '>' or ';' or '='
+                || (edge && c == ' ')
+                || (i == 0 && c == '#'))
+            {
+                sb.Append('\\').Append(c);
             }
             else
             {
-                ps.AddParameter("UserPrincipalName", $"{currentSam}@{_upnSuffix}");
+                sb.Append(c);
             }
-            if (HasExplicitDc) ps.AddParameter("Server", _domainController);
-
-            await ps.InvokeAsync();
-
-            if (ps.HadErrors)
-            {
-                var errors = string.Join("; ", ps.Streams.Error.Select(e => e.ToString()));
-                throw new ProvisioningException($"Set-ADUser failed: {errors}");
-            }
-
-            return new CreateUserResponse(newSam, true, null);
         }
-    }
-
-    private static SecureString ToSecureString(string value)
-    {
-        var secure = new SecureString();
-        foreach (var c in value) secure.AppendChar(c);
-        return secure;
+        return sb.ToString();
     }
 
     /// <summary>20 chars, 4 complexity classes (AD default policy safe), no ambiguous glyphs.</summary>
@@ -206,5 +241,30 @@ public sealed class AdProvisioningService
         return new string(array);
 
         static char Pick(string pool) => pool[RandomNumberGenerator.GetInt32(pool.Length)];
+    }
+}
+
+internal static class AdErrors
+{
+    public static string Format(Exception ex)
+    {
+        var parts = new List<string>();
+        for (var e = ex; e != null; e = e.InnerException)
+        {
+            if (e is COMException com && com.ErrorCode != 0 && !string.IsNullOrWhiteSpace(com.Message))
+            {
+                var code = $"0x{unchecked((uint)com.ErrorCode):X8}";
+                if (parts.Count == 0 || parts[^1] != com.Message)
+                {
+                    parts.Add($"{com.Message} ({code})");
+                }
+                continue;
+            }
+            if (!string.IsNullOrWhiteSpace(e.Message) && (parts.Count == 0 || parts[^1] != e.Message))
+            {
+                parts.Add(e.Message);
+            }
+        }
+        return parts.Count == 0 ? ex.GetType().Name : string.Join(" | ", parts);
     }
 }
