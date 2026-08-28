@@ -1,7 +1,8 @@
 # ACM Provisioning API
 
-Minimal ASP.NET API that creates on-prem Active Directory accounts for approved
-ACM@UIC signups. The member portal's outbox worker is its only caller.
+Minimal ASP.NET API that creates and updates on-prem Active Directory accounts
+for ACM@UIC members. The member portal is its only caller: the outbox worker
+POSTs new accounts, and profile saves PATCH existing ones.
 
 ## Endpoints
 
@@ -9,15 +10,54 @@ ACM@UIC signups. The member portal's outbox worker is its only caller.
 | --- | --- | --- | --- |
 | GET | `/healthz` | none | liveness |
 | POST | `/users` | Bearer | create AD user (idempotent on sAMAccountName) |
-| GET | `/users/{netid}` | Bearer | existence check |
+| PATCH | `/users/{sam}` | Bearer | update AD user; `{sam}` is the current sAMAccountName |
+| GET | `/users/{sam}` | Bearer | existence check |
 
-`POST /users` body: `{ netid, firstName, lastName, displayName, email, uin?, department?, company?, eventId, preferredName? }`.
-AD mapping: `GivenName`←firstName, `Surname`←lastName, `Name`←"First Last",
-`DisplayName`←displayName (preferred or "First Last"), `EmployeeID`←uin,
-`Department`←major, `Company`←college, `EmailAddress`←email,
-`sAMAccountName`/`UserPrincipalName`←netid. `eventId` is correlation-only.
-Response: `{ samAccountName, existed, oneTimePassword? }` — `oneTimePassword`
-is returned only when a NEW account was created. It is never logged or stored.
+JSON is camelCase. Required create fields: `username` (or `netid`), `firstName`,
+`lastName`, `displayName`, `email`, `eventId`. Missing any of those is `400`.
+
+`POST /users` body:
+
+```json
+{
+  "netid": "amorga42",
+  "username": "amorga",
+  "firstName": "Alex",
+  "lastName": "Morgan",
+  "preferredName": "Alex",
+  "displayName": "Alex",
+  "email": "alex@example.com",
+  "uin": "678901234",
+  "department": "Computer Science",
+  "company": "Engineering",
+  "eventId": "<uuid>"
+}
+```
+
+`username` is the ACM account name. It becomes `sAMAccountName` and the local
+part of `UserPrincipalName`. If it is omitted, `netid` is used instead. `eventId`
+is correlation-only and is not written to AD.
+
+AD mapping on create: `Name`/`CN`←`"First Last"`, `GivenName`←firstName,
+`Surname`←lastName, `DisplayName`←displayName (portal sends preferred name or
+`"First Last"`), `EmployeeID`←uin, `Department`←major, `Company`←college,
+`EmailAddress`←email.
+
+Response: `{ samAccountName, existed, oneTimePassword? }`. `oneTimePassword` is
+returned only when a new account was created. It is never logged or stored.
+Replay against an existing `sAMAccountName` returns `{ existed: true }` with no
+password.
+
+`PATCH /users/{sam}` body (all fields optional): `{ username, firstName,
+lastName, preferredName, displayName, email, uin }`. Written to AD when set:
+`GivenName`, `Surname`, `DisplayName`, `EmailAddress`, `EmployeeID`. A new
+`username` renames `sAMAccountName` and `UserPrincipalName`. `preferredName` is
+accepted and ignored; send `displayName` for the visible name. Unknown `{sam}`
+is `404 { samAccountName, existed: false }`. Success is
+`{ samAccountName, existed: true }` (no password).
+
+`GET /users/{sam}` is `200 { samAccountName, existed: true }` or
+`404 { samAccountName, existed: false }`.
 
 ## Host requirements
 
@@ -74,10 +114,20 @@ path, port 2433 already bound).
 ## Verify
 
 ```powershell
+# create (sAMAccountName comes from username, not netid)
 curl -H "Authorization: Bearer <token>" -X POST http://localhost:2433/users `
   -H "content-type: application/json" `
-  -d '{"netid":"amorga42","firstName":"Alex","lastName":"Morgan","preferredName":"Alex","displayName":"Alex","email":"alex@example.com","uin":"678901234","department":"Computer Science","company":"Engineering","eventId":"<uuid>"}'
-# → { "samAccountName": "amorga42", "existed": false, "oneTimePassword": "…" }
-# replay → { "samAccountName": "amorga42", "existed": true }
-Get-ADUser amorga42 -Properties GivenName, Surname, DisplayName, EmployeeID, Department, Company, EmailAddress
+  -d '{"netid":"amorga42","username":"amorga","firstName":"Alex","lastName":"Morgan","preferredName":"Alex","displayName":"Alex","email":"alex@example.com","uin":"678901234","department":"Computer Science","company":"Engineering","eventId":"<uuid>"}'
+# → { "samAccountName": "amorga", "existed": false, "oneTimePassword": "…" }
+# replay → { "samAccountName": "amorga", "existed": true }
+
+curl -H "Authorization: Bearer <token>" http://localhost:2433/users/amorga
+# → { "samAccountName": "amorga", "existed": true }
+
+curl -H "Authorization: Bearer <token>" -X PATCH http://localhost:2433/users/amorga `
+  -H "content-type: application/json" `
+  -d '{"displayName":"Alex Morgan","email":"alex@example.com"}'
+# → { "samAccountName": "amorga", "existed": true }
+
+Get-ADUser amorga -Properties GivenName, Surname, DisplayName, EmployeeID, Department, Company, EmailAddress
 ```
