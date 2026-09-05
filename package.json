@@ -24,7 +24,7 @@
     "@builder.io/qwik": "1.20.0",
     "@builder.io/qwik-city": "1.20.0",
     "@electric-sql/pglite": "^0.5.7",
-    "better-auth": "1.7.1",
+    "better-auth": "1.7.2",
     "drizzle-orm": "^0.45.2",
     "fastify": "^5.0.0",
     "nodemailer": "^9.0.5",
