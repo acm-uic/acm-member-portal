@@ -24,16 +24,16 @@
     "@builder.io/qwik": "1.20.0",
     "@builder.io/qwik-city": "1.20.0",
     "@electric-sql/pglite": "^0.5.7",
-    "better-auth": "1.7.1",
+    "better-auth": "1.7.2",
     "drizzle-orm": "^0.45.2",
     "fastify": "^5.0.0",
-    "nodemailer": "^9.0.5",
+    "nodemailer": "^9.1.1",
     "pg": "^8.16.0",
-    "zod": "^4.0.0"
+    "zod": "^4.5.4"
   },
   "devDependencies": {
     "@tailwindcss/vite": "4.3.3",
-    "@types/node": "^26.2.0",
+    "@types/node": "^26.4.1",
     "@types/nodemailer": "^8.0.1",
     "@types/pg": "^8.15.0",
     "drizzle-kit": "^0.31.4",
