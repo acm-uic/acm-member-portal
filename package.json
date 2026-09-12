@@ -26,7 +26,7 @@
     "@electric-sql/pglite": "^0.5.7",
     "better-auth": "1.7.2",
     "drizzle-orm": "^0.45.2",
-    "fastify": "^5.0.0",
+    "fastify": "^5.12.3",
     "nodemailer": "^9.1.1",
     "pg": "^8.16.0",
     "zod": "^4.5.4"
