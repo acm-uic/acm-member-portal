@@ -2,6 +2,7 @@ import { component$, Slot } from "@builder.io/qwik";
 import {
 	routeAction$,
 	routeLoader$,
+	useLocation,
 	z,
 	zod$,
 	type RequestHandler,
@@ -82,7 +83,18 @@ export const useSetDashboardView = routeAction$(
 	}),
 );
 
+/**
+ * Host for the active page. A new instance per pathname so SPA navigation
+ * cannot leave the previous route projected into the layout Slot.
+ */
+const PageSlot = component$(() => (
+	<div class="flex-1 min-w-0">
+		<Slot />
+	</div>
+));
+
 export default component$(() => {
+	const loc = useLocation();
 	const shell = useShellData();
 	const setView = useSetDashboardView();
 	return (
@@ -95,9 +107,9 @@ export default component$(() => {
 				dashboardView={shell.value.dashboardView}
 				setDashboardView={setView}
 			/>
-			<div class="flex-1 min-w-0">
+			<PageSlot key={loc.url.pathname}>
 				<Slot />
-			</div>
+			</PageSlot>
 		</div>
 	);
 });

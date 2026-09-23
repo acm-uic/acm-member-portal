@@ -414,10 +414,10 @@ export default component$(() => {
 
 		const sigChanges: SigLeaderChange[] = [];
 		for (const member of data.value.members) {
-			const desiredRolesForUser = desiredRoles(member.id, member.roles);
+			const desiredRolesForUser = pending.value[member.id] ?? member.roles;
 			const wantsLeader = desiredRolesForUser.includes(SIG_LEADER_ROLE_KEY);
 			const desired = wantsLeader
-				? desiredSigs(member.id, member.ledSigIds)
+				? (pendingSigs.value[member.id] ?? member.ledSigIds)
 				: [];
 			const origSorted = [...member.ledSigIds].sort().join(",");
 			const nextSorted = [...desired].sort().join(",");
@@ -442,7 +442,21 @@ export default component$(() => {
 	useOnWindow(
 		"beforeunload",
 		$((event) => {
-			if (!hasUnsaved()) return;
+			const rolesDirty = Object.entries(pending.value).some(([userId, keys]) => {
+				const member = data.value.members.find((m) => m.id === userId);
+				if (!member) return false;
+				return [...keys].sort().join(",") !== [...member.roles].sort().join(",");
+			});
+			const sigsDirty = Object.entries(pendingSigs.value).some(
+				([userId, keys]) => {
+					const member = data.value.members.find((m) => m.id === userId);
+					if (!member) return false;
+					return (
+						[...keys].sort().join(",") !== [...member.ledSigIds].sort().join(",")
+					);
+				},
+			);
+			if (!rolesDirty && !sigsDirty) return;
 			event.preventDefault();
 			(event as BeforeUnloadEvent).returnValue = "";
 		}),
@@ -594,6 +608,7 @@ export default component$(() => {
 										</button>
 										<Link
 											href={`/dashboard/admin/members/${m.id}`}
+											preventdefault:click
 											class="text-accent text-label no-underline"
 										>
 											History

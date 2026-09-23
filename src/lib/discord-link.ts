@@ -44,6 +44,9 @@ export function discordTakenMessage(reason: DiscordTakenReason): string {
 
 type MutatingDb = Pick<typeof db, "insert" | "update" | "delete">;
 
+/** Better Auth 1.7 synthetic issuer for Discord (no OIDC issuer of its own). */
+export const DISCORD_ACCOUNT_ISSUER = `local:oauth:${DISCORD_PROVIDER_ID}`;
+
 export async function insertDiscordAccount(
   database: MutatingDb,
   userId: string,
@@ -56,6 +59,7 @@ export async function insertDiscordAccount(
       userId,
       accountId: discordId,
       providerId: DISCORD_PROVIDER_ID,
+      issuer: DISCORD_ACCOUNT_ISSUER,
     })
     .onConflictDoNothing();
 }

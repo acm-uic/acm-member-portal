@@ -98,6 +98,7 @@ export const Sidebar = component$<{
 					<Link
 						key={item.href}
 						href={item.href}
+						preventdefault:click
 						class={navClass(isNavActive(loc.url.pathname, item.href))}
 					>
 						<i
@@ -116,6 +117,7 @@ export const Sidebar = component$<{
 							<Link
 								key={item.href}
 								href={item.href}
+								preventdefault:click
 								class={navClass(isNavActive(loc.url.pathname, item.href))}
 							>
 								<i

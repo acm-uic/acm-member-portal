@@ -8,13 +8,11 @@ import {
 	zod$,
 } from "@builder.io/qwik-city";
 import { ThemeToggle } from "~/components/theme-toggle";
-import { auth, microsoftConfigured } from "~/lib/auth";
 import { isDevLoginEnabled } from "~/lib/db/mode";
-import { resolveDevLoginEmail } from "~/lib/dev/login-identifier";
 
 export const useLoginOptions = routeLoader$(() => ({
 	devLogin: isDevLoginEnabled(),
-	microsoft: microsoftConfigured,
+	microsoft: Boolean(process.env.MICROSOFT_CLIENT_ID),
 }));
 
 /** Better Auth sets several cookies; Qwik's Node adapter only emits the cookie jar as multiple Set-Cookie lines. */
@@ -35,6 +33,9 @@ export const useDevLogin = routeAction$(
 			return { ok: false as const, error: "Dev login is disabled." };
 		}
 		const next = String(data.next || "/dashboard");
+		const { resolveDevLoginEmail } = await import(
+			"~/lib/dev/login-identifier"
+		);
 		const email = await resolveDevLoginEmail(data.login);
 		if (!email) {
 			return {
@@ -42,6 +43,7 @@ export const useDevLogin = routeAction$(
 				error: "Invalid email, username, or password.",
 			};
 		}
+		const { auth } = await import("~/lib/auth");
 		let res: Response;
 		try {
 			res = await auth.api.signInEmail({
@@ -113,7 +115,7 @@ export default component$(() => {
 							<code class="text-label">officer@local.test</code> /{" "}
 							<code class="text-label">local-dev</code>. Not Entra or real AD.
 						</p>
-						<Form action={action} class="grid gap-md">
+						<Form reloadDocument action={action} class="grid gap-md">
 							<input type="hidden" name="next" value={next} />
 							<label class="grid gap-xs">
 								<span class="text-label text-text2">Email or username</span>

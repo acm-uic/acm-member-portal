@@ -77,6 +77,11 @@ export const auth = betterAuth({
     },
   },
   account: {
+    additionalFields: {
+      // Better Auth 1.7 core field. Declared here so a hoisted
+      // @better-auth/core@1.6.x adapter still persists issuer on insert.
+      issuer: { type: "string", required: true },
+    },
     accountLinking: {
       enabled: true,
       trustedProviders: microsoftConfigured ? ["microsoft"] : [],
