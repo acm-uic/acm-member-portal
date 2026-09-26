@@ -74,6 +74,7 @@ export const AlumniOverview = component$<{
 		<p class="m-0">
 			<Link
 				href="/dashboard/profile"
+				preventdefault:click
 				class="text-accent text-label no-underline"
 			>
 				Edit your profile

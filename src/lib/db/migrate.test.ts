@@ -102,6 +102,12 @@ describe("applySqlMigrations (PGlite)", () => {
 			"discord_username",
 		]);
 
+		const { rows: issuerCols } = await query(
+			`SELECT column_name FROM information_schema.columns
+       WHERE table_name = 'account' AND column_name = 'issuer'`,
+		);
+		expect(issuerCols).toHaveLength(1);
+
 		await client.close();
 	});
 
@@ -156,6 +162,51 @@ describe("applySqlMigrations (PGlite)", () => {
 			last_name: "Morgan",
 			preferred_name: null,
 		});
+
+		await client.close();
+	});
+
+	it("backfills account.issuer for credential and oauth rows", async () => {
+		const client = new PGlite();
+		const query = pgliteQuery(client);
+
+		await query(`CREATE TABLE IF NOT EXISTS "_migrations" (
+      "name" text PRIMARY KEY,
+      "applied_at" timestamptz NOT NULL DEFAULT now()
+    )`);
+		await query(`CREATE TABLE "account" (
+      "id" text PRIMARY KEY,
+      "user_id" text NOT NULL,
+      "account_id" text NOT NULL,
+      "provider_id" text NOT NULL,
+      "password" text,
+      "created_at" timestamptz NOT NULL DEFAULT now(),
+      "updated_at" timestamptz NOT NULL DEFAULT now()
+    )`);
+		await query(
+			`INSERT INTO "account" ("id", "user_id", "account_id", "provider_id")
+       VALUES ($1, $2, $3, $4), ($5, $6, $7, $8)`,
+			["a-cred", "u-1", "u-1", "credential", "a-dc", "u-1", "555", "discord"],
+		);
+		for (const name of [
+			"0000_initial.sql",
+			"0001_signup_name_columns.sql",
+			"0002_username.sql",
+			"0003_discord.sql",
+			"0004_sigs.sql",
+		]) {
+			await query('INSERT INTO "_migrations" ("name") VALUES ($1)', [name]);
+		}
+
+		await applySqlMigrations(query, { useAdvisoryLock: false });
+
+		const { rows } = await query(
+			`SELECT provider_id, issuer FROM account ORDER BY provider_id`,
+		);
+		expect(rows).toEqual([
+			{ provider_id: "credential", issuer: "local:credential" },
+			{ provider_id: "discord", issuer: "local:oauth:discord" },
+		]);
 
 		await client.close();
 	});

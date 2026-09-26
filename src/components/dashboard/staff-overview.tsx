@@ -72,6 +72,7 @@ export const StaffOverview = component$<{
 						<Link
 							key={link.href}
 							href={link.href}
+							preventdefault:click
 							class="px-md py-sm rounded-control text-label border border-border bg-surface2 text-text1 no-underline"
 						>
 							{link.label}
@@ -111,6 +112,7 @@ export const StaffOverview = component$<{
 						<p class="m-0 mt-sm">
 							<Link
 								href="/dashboard/admin/signups"
+								preventdefault:click
 								class="text-accent text-label no-underline"
 							>
 								Open signup queue
@@ -134,6 +136,7 @@ export const StaffOverview = component$<{
 						<p class="m-0 mt-sm">
 							<Link
 								href="/dashboard/admin/alumni"
+								preventdefault:click
 								class="text-accent text-label no-underline"
 							>
 								Open alumni review
