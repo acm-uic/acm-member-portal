@@ -1,5 +1,5 @@
 /**
- * One-shot local-dev bootstrap: seed officer@localhost and start the
+ * One-shot local-dev bootstrap: seed officer@local.test and start the
  * in-process provisioning drain when running against embedded PGlite
  * (or DEV_LOGIN=1).
  *
@@ -21,11 +21,31 @@ const OFFICER_PASSWORD = "local-dev";
 const OFFICER_NAME = "Local Officer";
 
 async function seedOfficer(): Promise<void> {
-	const { rows } = await db.execute<{ count: number }>(
-		sql`SELECT count(*)::int AS count FROM "user"`,
+	const { rows: officers } = await db.execute<{ id: string }>(
+		sql`SELECT id FROM "user" WHERE email = ${OFFICER_EMAIL} LIMIT 1`,
 	);
-	const count = rows[0]?.count ?? 0;
-	if (count > 0) return;
+	const existingId = officers[0]?.id;
+
+	if (existingId) {
+		const { rows: creds } = await db.execute<{ id: string }>(
+			sql`SELECT id FROM account
+          WHERE user_id = ${existingId}
+            AND provider_id = 'credential'
+          LIMIT 1`,
+		);
+		if (creds[0]) {
+			await db.execute(
+				sql`UPDATE "user"
+            SET netid = 'officer',
+                username = COALESCE(username, 'officer')
+          WHERE id = ${existingId}`,
+			);
+			return;
+		}
+		// User row without a credential account: Better Auth 1.7 sign-up
+		// created the user then failed linking (missing issuer column).
+		await db.execute(sql`DELETE FROM "user" WHERE id = ${existingId}`);
+	}
 
 	const { auth } = await import("~/lib/auth");
 	const result = await auth.api.signUpEmail({
@@ -41,7 +61,6 @@ async function seedOfficer(): Promise<void> {
 		return;
 	}
 
-	// Ensure netid is set for the officer (email prefix)
 	await db.execute(
 		sql`UPDATE "user" SET netid = 'officer', username = COALESCE(username, 'officer') WHERE id = ${result.user.id}`,
 	);
@@ -81,11 +100,11 @@ function startDrainLoop(): void {
 export async function ensureDevBootstrap(): Promise<void> {
 	if (!isDevLoginEnabled()) return;
 	if (globalThis.__portalDevBootstrapped) return;
-	globalThis.__portalDevBootstrapped = true;
 
 	try {
 		await seedOfficer();
 		startDrainLoop();
+		globalThis.__portalDevBootstrapped = true;
 	} catch (err) {
 		console.error("[dev] bootstrap failed", err);
 	}

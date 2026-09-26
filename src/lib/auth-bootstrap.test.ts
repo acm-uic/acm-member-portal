@@ -91,6 +91,7 @@ describe("bootstrapUser Discord copy", () => {
         expect.objectContaining({
           providerId: "discord",
           accountId: "555",
+          issuer: "local:oauth:discord",
         }),
       ]),
     );

@@ -16,7 +16,7 @@ import {
 
 /* ================= better-auth core tables =================
    Keep in lockstep with `npx auth@latest generate` (verified by Slice 3 criteria).
-   Column names/types are what better-auth@1.6 expects. */
+   Column names/types are what better-auth@1.7 expects. */
 
 export const user = pgTable(
   "user",
@@ -73,6 +73,8 @@ export const account = pgTable(
       .references(() => user.id, { onDelete: "cascade" }),
     accountId: text("account_id").notNull(),
     providerId: text("provider_id").notNull(),
+    /* Better Auth 1.7 identity key is (issuer, accountId), not providerId. */
+    issuer: text("issuer").notNull(),
     accessToken: text("access_token"),
     refreshToken: text("refresh_token"),
     accessTokenExpiresAt: timestamp("access_token_expires_at", {
@@ -92,6 +94,7 @@ export const account = pgTable(
       .defaultNow(),
   },
   (t) => [
+    unique("account_issuer_account_id_key").on(t.issuer, t.accountId),
     unique("account_provider_account_id_key").on(t.providerId, t.accountId),
   ],
 );

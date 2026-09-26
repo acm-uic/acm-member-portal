@@ -179,6 +179,7 @@ export default component$(() => {
       <p class="m-0">
         <Link
           href="/dashboard/admin/members"
+          preventdefault:click
           class="text-accent text-label no-underline"
         >
           ← Members
