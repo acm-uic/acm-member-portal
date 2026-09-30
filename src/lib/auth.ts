@@ -156,6 +156,22 @@ export const auth = betterAuth({
     },
     account: {
       create: {
+        before: async (created) => {
+          const createdAccount = created as typeof created & {
+            issuer?: string | null;
+          };
+          if (createdAccount.issuer) return;
+
+          return {
+            data: {
+              ...created,
+              issuer:
+                created.providerId === "credential"
+                  ? "local:credential"
+                  : `local:oauth:${created.providerId}`,
+            },
+          };
+        },
         after: async (created) => {
           if (created.providerId !== DISCORD_PROVIDER_ID) return;
 
