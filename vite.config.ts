@@ -1,5 +1,6 @@
 import { dirname, resolve as resolvePath } from "node:path";
-import { defineConfig, type Plugin } from "vite";
+import { type Plugin } from "vite";
+import { defineConfig } from "vitest/config";
 import { qwikVite } from "@builder.io/qwik/optimizer";
 import { qwikCity } from "@builder.io/qwik-city/vite";
 import tailwindcss from "@tailwindcss/vite";
@@ -103,5 +104,9 @@ export default defineConfig(() => ({
 	},
 	worker: {
 		format: "es" as const,
+	},
+	test: {
+		// PGlite integration tests reset process-global module singletons.
+		fileParallelism: false,
 	},
 }));
