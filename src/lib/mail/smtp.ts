@@ -1,14 +1,14 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import nodemailer from "nodemailer";
+import type { Transporter } from "nodemailer";
 import type SMTPTransport from "nodemailer/lib/smtp-transport";
 
 function mailDir(): string {
 	return process.env.MAIL_DIR ?? ".data/mail";
 }
 
-let transport: nodemailer.Transporter<SMTPTransport.SentMessageInfo> | null =
-	null;
+let transport: Transporter<SMTPTransport.SentMessageInfo> | null = null;
 
 function getTransport() {
 	if (!process.env.SMTP_HOST) return null;
