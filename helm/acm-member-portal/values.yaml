@@ -130,7 +130,10 @@ resources:
     cpu: 500m
     memory: 512Mi
 
-podSecurityContext: {}
+# Matches the runtime user in Dockerfile; applies to migrations and all workers.
+podSecurityContext:
+  runAsUser: 10001
+  runAsGroup: 10001
 
 securityContext:
   runAsNonRoot: true
