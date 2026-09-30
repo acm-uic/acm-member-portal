@@ -19,9 +19,10 @@ RUN bun run build
 FROM node:${NODE_VERSION}-alpine AS runtime
 ENV NODE_ENV=production
 RUN apk add --no-cache tini \
- && addgroup -S app && adduser -S app -G app \
+ && addgroup -S -g 10001 app && adduser -S -u 10001 -G app app \
  && mkdir -p /app && chown app:app /app
-USER app
+# Keep these IDs aligned with the Helm podSecurityContext.
+USER 10001:10001
 WORKDIR /app
 COPY --from=build --chown=app:app /app/node_modules ./node_modules
 COPY --from=build --chown=app:app /app/dist ./dist
