@@ -17,6 +17,10 @@ const { router, notFound, staticFile } = createQwikCity({
 
 const app = Fastify({ logger: true, trustProxy: true });
 
+// Qwik reads request.raw itself. Fastify's parsers would consume the body first,
+// leaving Better Auth and Qwik form actions with an empty request stream.
+app.removeAllContentTypeParsers();
+
 app.setNotFoundHandler((request, reply) => {
 	staticFile(request.raw, reply.raw, () => {
 		router(request.raw, reply.raw, (error: unknown) => {
