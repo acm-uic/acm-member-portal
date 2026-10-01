@@ -1,7 +1,7 @@
 import { and, eq, ne } from "drizzle-orm";
-import { db } from "~/lib/db";
-import { account, signupSubmissions, user } from "~/lib/db/schema";
-import { DISCORD_PROVIDER_ID } from "~/lib/discord-constants";
+import { db } from "./db/index.ts";
+import { account, signupSubmissions, user } from "./db/schema.ts";
+import { DISCORD_PROVIDER_ID } from "./discord-constants.ts";
 
 export type DiscordTakenReason = "user" | "pending";
 

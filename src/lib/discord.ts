@@ -3,7 +3,7 @@ import {
   DISCORD_PROVIDER_ID,
   DISCORD_SCOPES,
   DISCORD_SIGNUP_COOKIE_MAX_AGE_SEC,
-} from "~/lib/discord-constants";
+} from "./discord-constants.ts";
 
 export {
   DISCORD_INVITE_URL,
@@ -13,7 +13,7 @@ export {
   DISCORD_SCOPES,
   DISCORD_SIGNUP_COOKIE,
   DISCORD_SIGNUP_COOKIE_MAX_AGE_SEC,
-} from "~/lib/discord-constants";
+} from "./discord-constants.ts";
 
 const DISCORD_API = "https://discord.com/api/v10";
 const DISCORD_AUTHORIZE = "https://discord.com/oauth2/authorize";

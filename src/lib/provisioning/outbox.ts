@@ -1,8 +1,8 @@
 import { eq, sql } from "drizzle-orm";
-import { db } from "../db";
-import { provisioningEvents, type signupSubmissions } from "../db/schema";
-import { formatSignupDisplayName, companyForCollege } from "../forms/fields";
-import { nextDelayMs, isDeadLettered } from "./backoff";
+import { db } from "../db/index.ts";
+import { provisioningEvents, type signupSubmissions } from "../db/schema.ts";
+import { formatSignupDisplayName, companyForCollege } from "../forms/fields.ts";
+import { nextDelayMs, isDeadLettered } from "./backoff.ts";
 
 type DbOrTx = Pick<typeof db, "insert" | "update" | "execute" | "select">;
 type Submission = typeof signupSubmissions.$inferSelect;

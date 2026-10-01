@@ -1,4 +1,4 @@
-import { sendMail } from "./smtp";
+import { sendMail } from "./smtp.ts";
 
 /**
  * Initial AD credentials. The one-time password transits portal → mailbox

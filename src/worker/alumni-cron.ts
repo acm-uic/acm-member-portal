@@ -1,8 +1,8 @@
 import { eq } from "drizzle-orm";
-import { computeAlumniCandidates } from "../lib/alumni/suggestions";
-import { db } from "../lib/db";
-import { user, userRoles } from "../lib/db/schema";
-import { sendMail } from "../lib/mail/smtp";
+import { computeAlumniCandidates } from "../lib/alumni/suggestions.ts";
+import { db } from "../lib/db/index.ts";
+import { user, userRoles } from "../lib/db/schema.ts";
+import { sendMail } from "../lib/mail/smtp.ts";
 
 const OFFICER_ROLE_ID = "00000000-0000-0000-0000-000000000002";
 

@@ -25,11 +25,19 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
 
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
       - name: Install
         run: bun install --frozen-lockfile
 
       - name: Typecheck
         run: bun run check
+
+      - name: Test
+        run: bun run test
 
       - name: Build
         run: bun run build
