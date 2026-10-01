@@ -1,15 +1,15 @@
 import { desc, eq, sql } from "drizzle-orm";
-import { db } from "~/lib/db";
-import { isEmbeddedDb } from "~/lib/db/mode";
+import { db } from "./db/index.ts";
+import { isEmbeddedDb } from "./db/mode.ts";
 import {
   memberProfiles,
   provisioningEvents,
   signupSubmissions,
   user,
   userRoles,
-} from "~/lib/db/schema";
-import { discordIdTaken, insertDiscordAccount } from "~/lib/discord-link";
-import { formatSignupDisplayName } from "~/lib/forms/fields";
+} from "./db/schema.ts";
+import { discordIdTaken, insertDiscordAccount } from "./discord-link.ts";
+import { formatSignupDisplayName } from "./forms/fields.ts";
 
 /** Serializes concurrent first logins (distinct from migrate.ts's lock id). */
 const BOOTSTRAP_LOCK_ID = 727_002;

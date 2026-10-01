@@ -1,15 +1,16 @@
 /**
  * Worker entrypoint — runs in its own k8s Deployment via
  * `node src/worker/index.ts provision` and in a nightly CronJob via
- * `node src/worker/index.ts alumni` (Node 24+ type-stripping; every import
- * in this graph is RELATIVE because the ~ alias only exists under Vite).
+ * `node src/worker/index.ts alumni` (Node 24+ type-stripping). All local
+ * imports in this graph use relative paths with explicit .ts extensions,
+ * including index.ts for directories, so Node can resolve them without Vite.
  */
-import { drainOnce } from "./provisioning";
+import { drainOnce } from "./provisioning.ts";
 
 const MODE = process.argv[2] ?? "provision";
 
 if (MODE === "alumni") {
-	const { runAlumniDigest } = await import("./alumni-cron");
+	const { runAlumniDigest } = await import("./alumni-cron.ts");
 	await runAlumniDigest();
 	process.exit(0);
 }

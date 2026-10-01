@@ -10,8 +10,8 @@ import { resolve as resolvePath } from "node:path";
 import { drizzle as drizzlePg } from "drizzle-orm/node-postgres";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import pg from "pg";
-import * as schema from "./schema";
-import { isEmbeddedDb, pgliteDataDir } from "./mode";
+import * as schema from "./schema.ts";
+import { isEmbeddedDb, pgliteDataDir } from "./mode.ts";
 
 const { Pool } = pg;
 
@@ -142,7 +142,7 @@ async function initEmbedded(): Promise<{ db: PortalDb; pool: PortalPool }> {
 
 	const { PGlite } = await import("@electric-sql/pglite");
 	const { drizzle } = await import("drizzle-orm/pglite");
-	const { applySqlMigrations } = await import("./migrate");
+	const { applySqlMigrations } = await import("./migrate.ts");
 
 	const useMemory = Boolean(process.env.VITEST) && !process.env.PGLITE_DATA_DIR;
 	const dataDir = useMemory ? "memory://" : resolvePath(pgliteDataDir());

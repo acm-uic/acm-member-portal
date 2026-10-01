@@ -1,23 +1,23 @@
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "@better-auth/drizzle-adapter";
 import { eq } from "drizzle-orm";
-import { db } from "~/lib/db";
-import { isDevLoginEnabled, isEmbeddedDb } from "~/lib/db/mode";
+import { db } from "./db/index.ts";
+import { isDevLoginEnabled, isEmbeddedDb } from "./db/mode.ts";
 import {
   account,
   auditEvents,
   session,
   user,
   verification,
-} from "~/lib/db/schema";
-import { bootstrapUser } from "~/lib/auth-bootstrap";
+} from "./db/schema.ts";
+import { bootstrapUser } from "./auth-bootstrap.ts";
 import {
   DISCORD_PROVIDER_ID,
   DISCORD_SCOPES,
   fetchDiscordIdentity,
   isDiscordConfigured,
-} from "~/lib/discord";
-import { discordIdTaken } from "~/lib/discord-link";
+} from "./discord.ts";
+import { discordIdTaken } from "./discord-link.ts";
 
 /** Local-only defaults — never applied in production. */
 function ensureDevAuthEnv(): void {

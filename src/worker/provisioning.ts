@@ -2,9 +2,9 @@ import {
 	claimNext,
 	markFailed,
 	markProvisioned,
-} from "../lib/provisioning/outbox";
-import { MAX_ATTEMPTS } from "../lib/provisioning/backoff";
-import { sendCredentialEmail } from "../lib/mail/templates";
+} from "../lib/provisioning/outbox.ts";
+import { MAX_ATTEMPTS } from "../lib/provisioning/backoff.ts";
+import { sendCredentialEmail } from "../lib/mail/templates.ts";
 import { randomBytes } from "node:crypto";
 
 /**
@@ -116,10 +116,10 @@ async function seedLocalMemberLogin(args: {
 	preferredName?: string;
 }): Promise<void> {
 	try {
-		const { auth } = await import("../lib/auth");
+		const { auth } = await import("../lib/auth.ts");
 		const { eq } = await import("drizzle-orm");
-		const { db } = await import("../lib/db");
-		const { user } = await import("../lib/db/schema");
+		const { db } = await import("../lib/db/index.ts");
+		const { user } = await import("../lib/db/schema.ts");
 
 		const [existing] = await db
 			.select({ id: user.id })

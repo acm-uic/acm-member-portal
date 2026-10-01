@@ -1,6 +1,6 @@
 import { and, eq, sql } from "drizzle-orm";
-import { db } from "../db";
-import { auditEvents, userRoles } from "../db/schema";
+import { db } from "../db/index.ts";
+import { auditEvents, userRoles } from "../db/schema.ts";
 
 const MEMBER_ROLE_ID = "00000000-0000-0000-0000-000000000001";
 const ALUMNI_ROLE_ID = "00000000-0000-0000-0000-000000000006";

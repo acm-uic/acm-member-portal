@@ -1,5 +1,5 @@
 import { and, desc, eq } from "drizzle-orm";
-import type { FormFieldDef, FormSchemaDefinition } from "~/lib/types";
+import type { FormFieldDef, FormSchemaDefinition } from "../types.ts";
 
 /**
  * Base fields are LOCKED (FR1): they map to first-class columns on
@@ -132,8 +132,8 @@ export interface PublishedForm {
 
 /** Latest published signup form — the shape the public route renders. */
 export async function loadPublishedSignupForm(): Promise<PublishedForm> {
-	const { db } = await import("~/lib/db");
-	const { formSchemas } = await import("~/lib/db/schema");
+	const { db } = await import("../db/index.ts");
+	const { formSchemas } = await import("../db/schema.ts");
 
 	const [row] = await db
 		.select()
