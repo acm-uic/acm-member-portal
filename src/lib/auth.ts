@@ -11,6 +11,7 @@ import {
   verification,
 } from "./db/schema.ts";
 import { bootstrapUser } from "./auth-bootstrap.ts";
+import { mapMicrosoftProfileToUser } from "./microsoft-profile.ts";
 import {
   DISCORD_PROVIDER_ID,
   DISCORD_SCOPES,
@@ -97,19 +98,7 @@ export const auth = betterAuth({
             tenantId: process.env.MICROSOFT_TENANT_ID!,
             prompt: "select_account" as const,
             disableProfilePhoto: true,
-            mapProfileToUser: (profile: {
-              preferred_username?: string;
-              upn?: string;
-              oid?: string;
-              name?: string;
-              email?: string;
-            }) => {
-              const netid = profile.preferred_username ?? profile.upn ?? null;
-              const entraOid = profile.oid ?? null;
-              const displayName = profile.name ?? null;
-              const email = profile.email ?? profile.preferred_username;
-              return { netid, entraOid, displayName, email };
-            },
+            mapProfileToUser: mapMicrosoftProfileToUser,
           },
         }
       : {}),
