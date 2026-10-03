@@ -32,6 +32,9 @@ public record UpdateUserRequest(
     string? PreferredName);
 
 public record CreateUserResponse(string SamAccountName, bool Existed, string? OneTimePassword);
+public record ChangePasswordRequest(string CurrentPassword, string NewPassword);
+
+public class PasswordChangeException(string message) : Exception(message);
 
 public class ProvisioningException(string message) : Exception(message);
 
@@ -167,6 +170,25 @@ public sealed class AdProvisioningService
             }
         });
 
+    public Task<bool> ChangePasswordAsync(string samAccountName, ChangePasswordRequest req) =>
+        Task.Run(() =>
+        {
+            using var user = FindUser(samAccountName);
+            if (user is null) return false;
+            try
+            {
+                // ChangePassword verifies the old password and enforces AD policy.
+                // Do not replace this with SetPassword, which is an administrative reset.
+                // No separate login bind: temporary/expired passwords can still be changed.
+                user.Invoke("ChangePassword", req.CurrentPassword, req.NewPassword);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                throw new PasswordChangeException(AdErrors.PasswordChangeMessage(ex, req.CurrentPassword, req.NewPassword));
+            }
+        });
+
     private DirectoryEntry? FindUser(string samAccountName)
     {
         using var root = new DirectoryEntry(UsersLdapPath);
@@ -246,11 +268,36 @@ public sealed class AdProvisioningService
 
 internal static class AdErrors
 {
+    public static string PasswordChangeMessage(Exception ex, string currentPassword, string newPassword)
+    {
+        var hint = "Active Directory rejected the password change.";
+        for (var e = ex; e != null; e = e.InnerException)
+        {
+            var code = unchecked((uint)e.HResult);
+            if (code == 0x80070056 || code == 0x8007052B || code == 0x8007052E)
+                hint = "Your current password is incorrect.";
+            else if (code == 0x800708C5 || code == 0x8007052D || code == 0x8007202F)
+                hint = "Active Directory rejected the new password. Its policy may require a longer or more complex password, prevent password reuse, or require waiting before changing it again.";
+        }
+        // AD may only report a general policy rejection. Preserve every detail it
+        // supplies rather than inventing a minimum length or password history count.
+        var message = $"{hint} AD details: {Format(ex)}";
+        foreach (var password in new[] { currentPassword, newPassword })
+        {
+            if (!string.IsNullOrEmpty(password)) message = message.Replace(password, "[redacted]", StringComparison.Ordinal);
+        }
+        return message;
+    }
+
     public static string Format(Exception ex)
     {
         var parts = new List<string>();
         for (var e = ex; e != null; e = e.InnerException)
         {
+            if (e is DirectoryServicesCOMException directory && !string.IsNullOrWhiteSpace(directory.ExtendedErrorMessage))
+            {
+                parts.Add(directory.ExtendedErrorMessage);
+            }
             if (e is COMException com && com.ErrorCode != 0 && !string.IsNullOrWhiteSpace(com.Message))
             {
                 var code = $"0x{unchecked((uint)com.ErrorCode):X8}";

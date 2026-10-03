@@ -2,7 +2,8 @@
 
 Minimal ASP.NET API that creates and updates on-prem Active Directory accounts
 for ACM@UIC members. The member portal is its only caller: the outbox worker
-POSTs new accounts, and profile saves PATCH existing ones.
+POSTs new accounts, profile saves PATCH existing ones, and members can change
+their ACM passwords from their profile.
 
 ## Endpoints
 
@@ -12,6 +13,7 @@ POSTs new accounts, and profile saves PATCH existing ones.
 | POST | `/users` | Bearer | create AD user (idempotent on sAMAccountName) |
 | PATCH | `/users/{sam}` | Bearer | update AD user; `{sam}` is the current sAMAccountName |
 | GET | `/users/{sam}` | Bearer | existence check |
+| POST | `/users/{sam}/password` | Bearer | change password, verifying the current password |
 
 JSON is camelCase. Required create fields: `username` (or `netid`), `firstName`,
 `lastName`, `displayName`, `email`, `eventId`. Missing any of those is `400`.
@@ -58,6 +60,35 @@ is `404 { samAccountName, existed: false }`. Success is
 
 `GET /users/{sam}` is `200 { samAccountName, existed: true }` or
 `404 { samAccountName, existed: false }`.
+
+`POST /users/{sam}/password` body: `{ currentPassword, newPassword }`.
+Success is `200 { ok: true }`. Missing passwords, an unchanged password, or an
+AD rejection return `400 { error }`. An unknown account returns `404`, directory
+lookup failures return `502`, and more than five attempts per account per minute
+return `429`. The limit is enforced by each Windows API instance.
+
+This uses ADSI `ChangePassword`, which verifies the old password and applies AD's
+effective policy, including fine-grained policies. It does not use an
+administrative `SetPassword` reset. AD's error message, HRESULT, and extended
+LDAP error details are returned to the member, with plain-language guidance for
+incorrect passwords and policy rejections. AD may report a general policy
+failure without identifying the exact length, complexity, history, or minimum
+age rule. The portal does not invent specific requirements. Passwords are not
+logged, stored, queued, or echoed in responses. An expired or temporary password
+is passed directly to `ChangePassword`, without a separate login bind.
+
+Production password changes require `WINDOWS_API_URL` to use HTTPS with a
+certificate trusted by the portal. Configure TLS on Kestrel or on a reverse proxy
+on the Windows host. Do not enable request body logging on either service or the
+proxy. The AD account must allow password changes and the service identity needs
+the Change Password extended right on managed users. Existing Reset Password
+delegation alone is not sufficient. AD's normal Everyone/SELF Change Password
+ACEs commonly supply this right; verify the effective ACL in your environment.
+
+Before rollout, verify on a test AD account: an incorrect current password leaves
+the password unchanged; a policy-rejected password displays AD's error; a valid
+change permits sign-in with the new password and rejects the old one; an initial
+temporary password can be changed; and repeated attempts return `429`.
 
 ## Host requirements
 
@@ -174,6 +205,11 @@ or the process dying before it reports `SERVICE_RUNNING` (bad `appsettings.json`
 port 2433 already bound).
 
 ## Verify
+
+Run the password error tests with
+`dotnet test ../windows-api.Tests/AcmProvisioning.Tests.csproj` from this directory.
+These test AD error translation and password redaction. Live password changes
+still require the Windows host and a test domain account.
 
 ```powershell
 # create (sAMAccountName comes from username, not netid)
