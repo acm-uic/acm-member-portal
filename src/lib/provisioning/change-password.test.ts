@@ -1,0 +1,110 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { changeAdPassword } from "./change-password";
+
+describe("changeAdPassword", () => {
+  beforeEach(() => {
+    vi.stubEnv("WINDOWS_API_URL", "https://directory.example/");
+    vi.stubEnv("WINDOWS_API_TOKEN", "test-token");
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("sends an encoded account name and exact passwords only to the protected endpoint", async () => {
+    const send = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(Response.json({ ok: true }));
+    expect(
+      await changeAdPassword("a/b", " old password ", " new password ", send),
+    ).toEqual({ ok: true });
+    const [url, request] = send.mock.calls[0];
+    expect(String(url)).toBe("https://directory.example/users/a%2Fb/password");
+    expect(request).toMatchObject({
+      method: "POST",
+      redirect: "error",
+      headers: { authorization: "Bearer test-token" },
+    });
+    expect(JSON.parse(request!.body as string)).toEqual({
+      currentPassword: " old password ",
+      newPassword: " new password ",
+    });
+  });
+
+  it("preserves AD policy details without truncation", async () => {
+    const error =
+      "Password history restriction (0x8007052D). " +
+      "Detailed directory policy. ".repeat(30);
+    const send = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(Response.json({ error }, { status: 400 }));
+    expect(
+      await changeAdPassword("member", "old-secret", "new-secret", send),
+    ).toEqual({ ok: false, error });
+  });
+
+  it("redacts passwords if an upstream rejection includes them", async () => {
+    const send = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        Response.json(
+          { error: "Rejected old-secret and new-secret" },
+          { status: 400 },
+        ),
+      );
+    expect(
+      await changeAdPassword("member", "old-secret", "new-secret", send),
+    ).toEqual({ ok: false, error: "Rejected [redacted] and [redacted]" });
+  });
+
+  it.each(["WINDOWS_API_URL", "WINDOWS_API_TOKEN"])(
+    "fails without %s rather than claiming stub success",
+    async (key) => {
+      vi.stubEnv(key, "");
+      const send = vi.fn<typeof fetch>();
+      expect((await changeAdPassword("member", "old", "new", send)).ok).toBe(
+        false,
+      );
+      expect(send).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses to transmit production passwords over HTTP", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("WINDOWS_API_URL", "http://directory.example");
+    const send = vi.fn<typeof fetch>();
+    expect((await changeAdPassword("member", "old", "new", send)).ok).toBe(
+      false,
+    );
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it.each([404, 429, 401, 500, 502])(
+    "handles HTTP %s without exposing arbitrary response bodies",
+    async (status) => {
+      const send = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(new Response("private proxy details", { status }));
+      const result = await changeAdPassword("member", "old", "new", send);
+      expect(result.ok).toBe(false);
+      expect(JSON.stringify(result)).not.toContain("private proxy details");
+      if (status === 429)
+        expect(JSON.stringify(result)).toContain("Wait a minute");
+    },
+  );
+
+  it("does not retry or leak exception text when the outcome is unknown", async () => {
+    const send = vi
+      .fn<typeof fetch>()
+      .mockRejectedValue(new Error("old-secret in private connection details"));
+    const result = await changeAdPassword(
+      "member",
+      "old-secret",
+      "new-secret",
+      send,
+    );
+    expect(result).toEqual({
+      ok: false,
+      error:
+        "Could not confirm the password change. Try signing in with your new password before trying again.",
+    });
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+});

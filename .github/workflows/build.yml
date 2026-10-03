@@ -97,6 +97,9 @@ jobs:
         working-directory: windows-api
         run: dotnet publish -c Release -o "${{ runner.temp }}/acm-provisioning"
 
+      - name: Test password errors
+        run: dotnet test windows-api.Tests/AcmProvisioning.Tests.csproj -c Release
+
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:

@@ -7,6 +7,7 @@ import {
   discordUnlinkButtonClass,
 } from "~/components/discord/join-cta";
 import { DynamicField } from "~/components/forms/dynamic-field";
+import { PasswordChange } from "~/components/forms/password-change";
 import { auth } from "~/lib/auth";
 import { db } from "~/lib/db";
 import { account, auditEvents, memberProfiles, user } from "~/lib/db/schema";
@@ -441,6 +442,7 @@ export default component$(() => {
           )}
         </div>
       </form>
+      <PasswordChange />
     </main>
   );
 });
