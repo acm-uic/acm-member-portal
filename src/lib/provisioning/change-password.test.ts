@@ -28,6 +28,48 @@ describe("changeAdPassword", () => {
     });
   });
 
+  it.each([
+    {
+      name: "HTML login page",
+      status: 200,
+      body: "<html>private proxy details</html>",
+    },
+    { name: "malformed JSON", status: 200, body: '{"ok":' },
+    { name: "empty body", status: 200, body: "" },
+    { name: "no content", status: 204, body: null },
+    {
+      name: "unrelated accepted response",
+      status: 202,
+      body: '{"accepted":true}',
+    },
+    { name: "missing confirmation", status: 200, body: '{"status":"healthy"}' },
+    {
+      name: "rejection",
+      status: 200,
+      body: '{"ok":false,"error":"old-secret"}',
+    },
+    { name: "string confirmation", status: 200, body: '{"ok":"true"}' },
+    { name: "numeric confirmation", status: 200, body: '{"ok":1}' },
+    { name: "null", status: 200, body: "null" },
+    { name: "boolean", status: 200, body: "true" },
+    { name: "array", status: 200, body: '[{"ok":true}]' },
+  ])(
+    "treats a 2xx $name as an unknown outcome without retrying",
+    async ({ status, body }) => {
+      const send = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(new Response(body, { status }));
+      expect(
+        await changeAdPassword("member", "old-secret", "new-secret", send),
+      ).toEqual({
+        ok: false,
+        error:
+          "Could not confirm the password change. Try signing in with your new password before trying again.",
+      });
+      expect(send).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("preserves AD policy details without truncation", async () => {
     const error =
       "Password history restriction (0x8007052D). " +

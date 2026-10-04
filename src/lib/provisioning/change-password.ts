@@ -1,5 +1,8 @@
 export type PasswordChangeResult = { ok: true } | { ok: false; error: string };
 
+const unconfirmedPasswordChangeError =
+  "Could not confirm the password change. Try signing in with your new password before trying again.";
+
 /** Password changes always require AD; there is deliberately no local stub. */
 export async function changeAdPassword(
   samAccountName: string,
@@ -37,7 +40,19 @@ export async function changeAdPassword(
       signal: AbortSignal.timeout(30_000),
       redirect: "error",
     });
-    if (response.ok) return { ok: true };
+    if (response.ok) {
+      const body: unknown = await response.json();
+      if (
+        body &&
+        typeof body === "object" &&
+        !Array.isArray(body) &&
+        "ok" in body &&
+        body.ok === true
+      ) {
+        return { ok: true };
+      }
+      return { ok: false, error: unconfirmedPasswordChangeError };
+    }
     if (response.status === 404) {
       return {
         ok: false,
@@ -65,9 +80,7 @@ export async function changeAdPassword(
         const passwords = [currentPassword, newPassword]
           .filter((password) => password.length > 0)
           .sort((a, b) => b.length - a.length)
-          .map((password) =>
-            password.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
-          );
+          .map((password) => password.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
         if (passwords.length > 0) {
           error = error.replace(
             new RegExp(passwords.join("|"), "g"),
@@ -83,11 +96,11 @@ export async function changeAdPassword(
         "Active Directory could not change your password. Contact ACM support.",
     };
   } catch {
-    // A timed-out request may have reached AD. Do not retry a password change.
+    // AD may have changed the password even if its confirmation is unavailable.
+    // Do not retry a password change.
     return {
       ok: false,
-      error:
-        "Could not confirm the password change. Try signing in with your new password before trying again.",
+      error: unconfirmedPasswordChangeError,
     };
   }
 }
