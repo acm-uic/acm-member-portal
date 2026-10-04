@@ -62,8 +62,17 @@ export async function changeAdPassword(
         typeof body.error === "string"
       ) {
         let error = body.error;
-        for (const password of [currentPassword, newPassword]) {
-          if (password) error = error.split(password).join("[redacted]");
+        const passwords = [currentPassword, newPassword]
+          .filter((password) => password.length > 0)
+          .sort((a, b) => b.length - a.length)
+          .map((password) =>
+            password.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+          );
+        if (passwords.length > 0) {
+          error = error.replace(
+            new RegExp(passwords.join("|"), "g"),
+            "[redacted]",
+          );
         }
         return { ok: false, error };
       }

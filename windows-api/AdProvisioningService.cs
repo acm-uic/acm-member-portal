@@ -282,9 +282,15 @@ internal static class AdErrors
         // AD may only report a general policy rejection. Preserve every detail it
         // supplies rather than inventing a minimum length or password history count.
         var message = $"{hint} AD details: {Format(ex)}";
-        foreach (var password in new[] { currentPassword, newPassword })
+        var passwords = new[] { currentPassword, newPassword }
+            .Where(password => !string.IsNullOrEmpty(password))
+            .OrderByDescending(password => password.Length)
+            .Select(System.Text.RegularExpressions.Regex.Escape)
+            .ToArray();
+        if (passwords.Length > 0)
         {
-            if (!string.IsNullOrEmpty(password)) message = message.Replace(password, "[redacted]", StringComparison.Ordinal);
+            message = System.Text.RegularExpressions.Regex.Replace(
+                message, string.Join("|", passwords), "[redacted]");
         }
         return message;
     }
