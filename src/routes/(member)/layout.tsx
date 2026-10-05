@@ -52,6 +52,7 @@ export const useShellData = routeLoader$(async (event) => {
 		userName: session.user.name,
 		userStatus: profile?.status === "active" ? "Active member" : "Member",
 		isAdmin: perms.has("admin.access"),
+		canCheckPortalStatus: roleKeys.some((role) => role === "admin" || role === "officer"),
 		canPreviewDashboard: canPreview,
 		dashboardView: view,
 	};
@@ -103,6 +104,7 @@ export default component$(() => {
 				userName={shell.value.userName}
 				userStatus={shell.value.userStatus}
 				isAdmin={shell.value.isAdmin}
+				canCheckPortalStatus={shell.value.canCheckPortalStatus}
 				canPreviewDashboard={shell.value.canPreviewDashboard}
 				dashboardView={shell.value.dashboardView}
 				setDashboardView={setView}

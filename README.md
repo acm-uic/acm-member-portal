@@ -177,6 +177,20 @@ See `windows-api/README.md`. Briefly: a Windows Server with the RSAT AD PowerShe
 module, a `.NET 8` runtime, a service account delegated `Create/delete user objects`
 on the Members OU, and the same `WINDOWS_API_TOKEN` value as the k8s Secret.
 
+## Portal status checks
+
+Admins and officers can open **Portal status** in the sidebar at
+`/dashboard/status`. Each visit checks the Windows API's `GET /healthz` from
+the portal server. **Check again** repeats the check. The user lookup calls
+`GET /users/{sam}` with an ACM username and reports whether the account exists
+in Active Directory.
+
+Set `WINDOWS_API_URL` on the webui deployment and `WINDOWS_API_TOKEN` for user
+lookups. Requests stay on the server, so the token is not sent to the browser.
+Checks time out after 10 seconds. An unconfigured local API reports a
+configuration error. The health endpoint confirms API connectivity; a user
+lookup also checks the backend's ability to query AD.
+
 ## Contributing
 
 Check out the [contributing guide](.github/CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md).

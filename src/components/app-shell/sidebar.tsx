@@ -75,6 +75,7 @@ export const Sidebar = component$<{
 	userName: string;
 	userStatus: string;
 	isAdmin: boolean;
+	canCheckPortalStatus: boolean;
 	canPreviewDashboard: boolean;
 	dashboardView: DashboardView;
 	// Action created in (member)/layout — typed loosely to avoid a layout↔sidebar cycle.
@@ -128,6 +129,19 @@ export const Sidebar = component$<{
 							</Link>
 						))}
 					</>
+				)}
+				{props.canCheckPortalStatus && (
+					<Link
+						href="/dashboard/status"
+						preventdefault:click
+						class={navClass(isNavActive(loc.url.pathname, "/dashboard/status"))}
+					>
+						<i
+							class="icon icon-shield w-[14px] h-[14px] shrink-0 leading-none not-italic"
+							aria-hidden="true"
+						/>
+						<span>Portal status</span>
+					</Link>
 				)}
 			</nav>
 			<div class="mt-auto pt-md border-t border-border flex flex-col gap-sm px-sm">
