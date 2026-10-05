@@ -1,5 +1,9 @@
 import { $, component$, useSignal } from "@builder.io/qwik";
 import type { PasswordChangeResult } from "~/lib/provisioning/change-password";
+import {
+  parsePasswordChangeResponse,
+  unconfirmedPasswordChangeError,
+} from "~/lib/password-change-response";
 
 export const PasswordChange = component$(() => {
   const pending = useSignal(false);
@@ -30,12 +34,14 @@ export const PasswordChange = component$(() => {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ currentPassword, newPassword, confirmPassword }),
       });
-      result.value = (await response.json()) as PasswordChangeResult;
+      result.value = parsePasswordChangeResponse(
+        await response.json(),
+        response.ok,
+      );
     } catch {
       result.value = {
         ok: false,
-        error:
-          "Could not confirm the password change. Try signing in with your new password before trying again.",
+        error: unconfirmedPasswordChangeError,
       };
     } finally {
       form.reset();
