@@ -106,6 +106,9 @@ $InstallPath = $InstallPath.Replace('/', '\')
 if ($InstallPath.StartsWith('\\?\') -or $InstallPath.StartsWith('\\.\')) {
     throw 'InstallPath must use a regular filesystem path, without a device prefix.'
 }
+if ($InstallPath -notmatch '^(?:[A-Za-z]:\\|\\\\[^\\]+\\[^\\]+(?:\\|$))') {
+    throw 'InstallPath must be an absolute drive or UNC path.'
+}
 $InstallPath = [IO.Path]::GetFullPath($InstallPath)
 if ($InstallPath.TrimEnd('\') -eq ([IO.Path]::GetPathRoot($InstallPath)).TrimEnd('\')) {
     throw 'InstallPath must be a dedicated application directory outside the project, not a drive or share root.'

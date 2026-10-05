@@ -145,6 +145,11 @@ $outputPath = $args[0]
         try { & $mockScript -InstallPath ($devicePrefix + $mockSource) -ServiceCredential $credential; throw 'Expected device path rejection' }
         catch { if ($_.Exception.Message -ne 'InstallPath must use a regular filesystem path, without a device prefix.') { throw } }
     }
+    foreach ($relativePath in @('C:', 'C:relative', 'relative', '\relative', '/relative')) {
+        try { & $mockScript -InstallPath $relativePath -ServiceCredential $credential; throw 'Expected relative path rejection' }
+        catch { if ($_.Exception.Message -ne 'InstallPath must be an absolute drive or UNC path.') { throw } }
+        Assert-True ($global:Calls.Count -eq 0) 'Relative installation path reached host operations'
+    }
     foreach ($invalidHealthUri in @($null, '', 'relative/healthz', 'ftp://localhost/healthz', 'file:///C:/Windows')) {
         try { & $mockScript -InstallPath $global:Install -ServiceCredential $credential -HealthUri $invalidHealthUri; throw 'Expected health URI validation failure' }
         catch { if ($_.FullyQualifiedErrorId -notlike 'ParameterArgumentValidationError*') { throw } }

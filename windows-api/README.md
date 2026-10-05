@@ -163,7 +163,9 @@ use these parameters. The health endpoint must be an absolute HTTP or HTTPS URI:
   -TimeoutSeconds 120
 ```
 
-Use a dedicated installation directory outside the source project. The script
+Use an absolute drive or UNC path to a dedicated installation directory outside
+the source project. Drive-relative forms such as `C:` and `C:folder` are rejected.
+The script
 rejects installation paths equal to, within, or containing the project directory.
 Containment checks use Windows filesystem handles to resolve path aliases,
 including NTFS short names. Device-prefixed installation paths are rejected.
