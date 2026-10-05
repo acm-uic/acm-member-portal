@@ -21,7 +21,9 @@ $source = $source.Remove($native.Extent.StartOffset, $native.Extent.EndOffset - 
 $source = $source -replace '(?m)^#Requires.*\r?\n', ''
 $temp = Join-Path $env:TEMP ('deploy-test-' + [guid]::NewGuid())
 New-Item -ItemType Directory $temp | Out-Null
-$mockScript = Join-Path $temp 'deploy.ps1'
+$mockSource = Join-Path $temp 'source'
+New-Item -ItemType Directory $mockSource | Out-Null
+$mockScript = Join-Path $mockSource 'deploy.ps1'
 Set-Content $mockScript $source
 
 function Assert-True {
@@ -131,7 +133,7 @@ $outputPath = $args[0]
     $global:InvalidLogDuringPublish = $false
     # Missing-SDK fallback keeps these checks harmless if a path guard regresses.
     $global:NoSdk = $true
-    foreach ($unsafePath in @([IO.Path]::GetPathRoot($temp), $temp, $env:TEMP, '\\deployment-test.invalid\share', '\\deployment-test.invalid\share\')) {
+    foreach ($unsafePath in @([IO.Path]::GetPathRoot($temp), $temp, $env:TEMP, $mockSource, (Join-Path $mockSource 'bin\Release'), '\\deployment-test.invalid\share', '\\deployment-test.invalid\share\')) {
         try { & $mockScript -InstallPath $unsafePath -ServiceCredential $credential; throw 'Expected unsafe path rejection' }
         catch { if ($_.Exception.Message -notlike 'InstallPath must be a dedicated application directory*') { throw } }
         Assert-True ($global:Calls.Count -eq 0) 'Unsafe installation path reached host operations'

@@ -102,10 +102,12 @@ if ($env:OS -ne 'Windows_NT') {
 }
 $InstallPath = [IO.Path]::GetFullPath($InstallPath)
 $installPrefix = $InstallPath.TrimEnd('\') + '\'
+$projectPrefix = ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($projectPath))).TrimEnd('\') + '\'
 if ($InstallPath.TrimEnd('\') -eq ([IO.Path]::GetPathRoot($InstallPath)).TrimEnd('\') -or
-    ([IO.Path]::GetFullPath($projectPath)).StartsWith($installPrefix, [StringComparison]::OrdinalIgnoreCase) -or
+    $projectPrefix.StartsWith($installPrefix, [StringComparison]::OrdinalIgnoreCase) -or
+    $installPrefix.StartsWith($projectPrefix, [StringComparison]::OrdinalIgnoreCase) -or
     $stagePath.StartsWith($installPrefix, [StringComparison]::OrdinalIgnoreCase)) {
-    throw 'InstallPath must be a dedicated application directory, not a drive root or a parent of the project or staging directory.'
+    throw 'InstallPath must be a dedicated application directory outside the project, not a drive root or a parent of the project or staging directory.'
 }
 if (Test-Path -LiteralPath $InstallPath -PathType Leaf) {
     throw 'InstallPath must be a directory.'

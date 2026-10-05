@@ -162,7 +162,9 @@ To override the installation directory, account, health endpoint, or wait timeou
   -TimeoutSeconds 120
 ```
 
-Use a dedicated installation directory. Deployment removes its old files and
+Use a dedicated installation directory outside the source project. The script
+rejects installation paths equal to, within, or containing the project directory.
+Deployment removes the installation directory's old files and
 subdirectories except `service-boot.log` and `startup-error.log`, then copies
 the new application files, including `appsettings.json`. Permission grants
 replace the service account's existing explicit grants on the installation
