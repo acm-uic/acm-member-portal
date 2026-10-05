@@ -17,9 +17,13 @@ export const BASE_FIELD_KEYS = [
 ] as const;
 export type BaseFieldKey = (typeof BASE_FIELD_KEYS)[number];
 
-export const USERNAME_MAX_LENGTH = 64;
-/** Allows empty so the required check can fire first; non-empty must be alphanumeric. */
-export const USERNAME_PATTERN = /^[a-zA-Z0-9]*$/;
+export const USERNAME_MAX_LENGTH = 20;
+/** sAMAccountName restrictions: https://learn.microsoft.com/en-us/windows/win32/adschema/a-samaccountname
+ * Allows empty so the required check can fire first.
+ */
+export const USERNAME_PATTERN = /^[^"/\\[\]:;|=,+*?<>]*$/;
+export const USERNAME_CHARACTER_ERROR =
+	'Username cannot contain any of these characters: " / \\ [ ] : ; | = , + * ? < >';
 
 export const BASE_FIELDS: FormFieldDef[] = [
 	{
@@ -63,7 +67,7 @@ export const BASE_FIELDS: FormFieldDef[] = [
 		order: -3,
 		maxLength: USERNAME_MAX_LENGTH,
 		helpText:
-			"Letters and numbers only, up to 64 characters. This becomes your ACM account name.",
+			"Up to 20 characters. Periods, dashes, and underscores are allowed. This becomes your ACM account name.",
 	},
 	{
 		key: "uin",

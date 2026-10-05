@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { FormFieldDef } from "~/lib/types";
 import {
 	BASE_FIELD_KEYS,
+	USERNAME_CHARACTER_ERROR,
 	USERNAME_PATTERN,
 	type BaseFieldKey,
 } from "./fields";
@@ -64,10 +65,7 @@ export function compileField(field: FormFieldDef): z.ZodTypeAny {
 				);
 			}
 			if (field.key === "username") {
-				s = s.regex(
-					USERNAME_PATTERN,
-					`${field.label} can only contain letters and numbers`,
-				);
+				s = s.regex(USERNAME_PATTERN, USERNAME_CHARACTER_ERROR);
 			}
 			if (field.minLength !== undefined)
 				s = s.min(
@@ -75,7 +73,12 @@ export function compileField(field: FormFieldDef): z.ZodTypeAny {
 					`${field.label} must be at least ${field.minLength} characters`,
 				);
 			if (field.maxLength)
-				s = s.max(field.maxLength, `${field.label} is too long`);
+				s = s.max(
+					field.maxLength,
+					field.key === "username"
+						? `${field.label} must be ${field.maxLength} characters or fewer`
+						: `${field.label} is too long`,
+				);
 			return field.required
 				? s.min(1, `${field.label} is required`)
 				: s.optional().or(z.literal(""));
