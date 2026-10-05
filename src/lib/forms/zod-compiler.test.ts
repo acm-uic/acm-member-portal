@@ -213,6 +213,7 @@ describe("compileFormSchema", () => {
 		"?",
 		"<",
 		">",
+		"@",
 	])("rejects the forbidden username character %s", (character) => {
 		const parsed = schema.safeParse({
 			...validInput,
@@ -225,6 +226,39 @@ describe("compileFormSchema", () => {
 			);
 		}
 	});
+
+	it.each(["name.", "name..", ".", "...", "name.   "])(
+		"rejects a username ending with a period: %s",
+		(username) => {
+			const parsed = schema.safeParse({ ...validInput, username });
+			expect(parsed.success).toBe(false);
+			if (!parsed.success) {
+				expect(parsed.error.flatten().fieldErrors.username?.[0]).toBe(
+					"Username cannot end with a period",
+				);
+			}
+		},
+	);
+
+	it.each(
+		Array.from({ length: 65 }, (_, index) =>
+			index < 32 ? index : index + 95,
+		),
+	)(
+		"rejects an internal control character with code point %i",
+		(codePoint) => {
+			const parsed = schema.safeParse({
+				...validInput,
+				username: `alex${String.fromCodePoint(codePoint)}morgan`,
+			});
+			expect(parsed.success).toBe(false);
+			if (!parsed.success) {
+				expect(parsed.error.flatten().fieldErrors.username?.[0]).toContain(
+					"cannot contain control characters",
+				);
+			}
+		},
+	);
 
 	it("rejects a username longer than 20 characters", () => {
 		const parsed = schema.safeParse({

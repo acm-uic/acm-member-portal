@@ -19,11 +19,12 @@ export type BaseFieldKey = (typeof BASE_FIELD_KEYS)[number];
 
 export const USERNAME_MAX_LENGTH = 20;
 /** sAMAccountName restrictions: https://learn.microsoft.com/en-us/windows/win32/adschema/a-samaccountname
- * Allows empty so the required check can fire first.
+ * Also reject control characters and @, since provisioning uses the username
+ * as the UPN prefix. Allows empty so the required check can fire first.
  */
-export const USERNAME_PATTERN = /^[^"/\\[\]:;|=,+*?<>]*$/;
+export const USERNAME_PATTERN = /^[^"/\\[\]:;|=,+*?<>@\p{Cc}]*$/u;
 export const USERNAME_CHARACTER_ERROR =
-	'Username cannot contain any of these characters: " / \\ [ ] : ; | = , + * ? < >';
+	'Username cannot contain control characters or any of these characters: " / \\ [ ] : ; | = , + * ? < > @';
 
 export const BASE_FIELDS: FormFieldDef[] = [
 	{
@@ -67,7 +68,7 @@ export const BASE_FIELDS: FormFieldDef[] = [
 		order: -3,
 		maxLength: USERNAME_MAX_LENGTH,
 		helpText:
-			"Up to 20 characters. Periods, dashes, and underscores are allowed. This becomes your ACM account name.",
+			"Up to 20 characters. Periods, dashes, and underscores are allowed, but a username cannot end with a period or contain @ or control characters. This becomes your ACM account name.",
 	},
 	{
 		key: "uin",

@@ -65,7 +65,10 @@ export function compileField(field: FormFieldDef): z.ZodTypeAny {
 				);
 			}
 			if (field.key === "username") {
-				s = s.regex(USERNAME_PATTERN, USERNAME_CHARACTER_ERROR);
+				s = s.regex(USERNAME_PATTERN, USERNAME_CHARACTER_ERROR).refine(
+					(value) => !value.endsWith("."),
+					`${field.label} cannot end with a period`,
+				);
 			}
 			if (field.minLength !== undefined)
 				s = s.min(
