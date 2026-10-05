@@ -9,10 +9,13 @@ function formatAnswer(value: unknown, field?: FormFieldDef): string {
   }
   if (typeof value === "boolean") return value ? "Yes" : "No";
   if (typeof value === "object") return JSON.stringify(value);
-  return (
-    field?.options?.find((option) => option.value === String(value))?.label ??
-    String(value)
-  );
+  if (field?.type === "select" || field?.type === "multiselect") {
+    return (
+      field.options?.find((option) => option.value === String(value))?.label ??
+      String(value)
+    );
+  }
+  return String(value);
 }
 
 /** Use the submission's saved schema, including fields that are now retired. */

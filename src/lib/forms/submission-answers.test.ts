@@ -55,6 +55,25 @@ describe("submissionAnswers", () => {
     expect(details[2]?.label).toBe("old_question");
   });
 
+  it.each<{ type: FormFieldDef["type"]; answer: string | number }>([
+    { type: "text", answer: "engineering" },
+    { type: "textarea", answer: "engineering\nnotes" },
+    { type: "email", answer: "engineer@example.com" },
+    { type: "number", answer: 0 },
+  ])("preserves $type answers when old options remain", ({ type, answer }) => {
+    const field: FormFieldDef = {
+      key: "changed_field",
+      label: "Changed field",
+      type,
+      required: true,
+      order: 1,
+      options: [{ value: String(answer), label: "Old option label" }],
+    };
+    expect(submissionAnswers({ changed_field: answer }, [field])).toEqual([
+      { key: "changed_field", label: "Changed field", value: String(answer) },
+    ]);
+  });
+
   it("distinguishes false and zero from unanswered fields", () => {
     expect(
       submissionAnswers(
