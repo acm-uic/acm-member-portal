@@ -115,9 +115,37 @@ function Resolve-AccountSid {
     return $account.Translate([Security.Principal.SecurityIdentifier]).Value
 }
 
+function Invoke-HealthRequest {
+    param([uri]$Uri, [int]$TimeoutMilliseconds)
+
+    $client = New-Object Net.Http.HttpClient
+    $client.Timeout = [Threading.Timeout]::InfiniteTimeSpan
+    $cancellation = New-Object Threading.CancellationTokenSource
+    $response = $null
+    try {
+        $cancellation.CancelAfter($TimeoutMilliseconds)
+        $request = $client.GetAsync($Uri, $cancellation.Token)
+        # Bound the caller's wait even if transport cancellation is delayed.
+        if (-not $request.Wait($TimeoutMilliseconds)) {
+            throw [TimeoutException]::new('Health request timed out.')
+        }
+        $response = $request.GetAwaiter().GetResult()
+        $response.EnsureSuccessStatusCode() | Out-Null
+        $content = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+        return $content | ConvertFrom-Json
+    }
+    finally {
+        $cancellation.Cancel()
+        if ($response) { $response.Dispose() }
+        $client.Dispose()
+        $cancellation.Dispose()
+    }
+}
+
 if ($env:OS -ne 'Windows_NT') {
     throw 'Run this script on the Windows service host.'
 }
+Add-Type -AssemblyName System.Net.Http
 $InstallPath = $InstallPath.Replace('/', '\')
 if ($InstallPath.StartsWith('\\?\') -or $InstallPath.StartsWith('\\.\')) {
     throw 'InstallPath must use a regular filesystem path, without a device prefix.'
@@ -309,10 +337,12 @@ try {
     $service.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Running, [TimeSpan]::FromSeconds($TimeoutSeconds))
     Invoke-NativeCommand $sc @('qc', $serviceName)
 
-    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
-    do {
+    $healthTimer = [Diagnostics.Stopwatch]::StartNew()
+    while ($healthTimer.Elapsed.TotalSeconds -lt $TimeoutSeconds) {
+        $remainingMilliseconds = [int][Math]::Floor($TimeoutSeconds * 1000 - $healthTimer.Elapsed.TotalMilliseconds)
+        if ($remainingMilliseconds -le 0) { break }
         try {
-            $health = Invoke-RestMethod -Uri $HealthUri -Method Get -TimeoutSec 5
+            $health = Invoke-HealthRequest -Uri $HealthUri -TimeoutMilliseconds ([Math]::Min(5000, $remainingMilliseconds))
             if ($health.status -eq 'ok') {
                 Write-Host "Deployment complete. $serviceName is running and $HealthUri reports ok."
                 return
@@ -321,8 +351,11 @@ try {
         catch {
             Write-Verbose $_.Exception.Message
         }
-        Start-Sleep -Seconds 1
-    } while ([DateTime]::UtcNow -lt $deadline)
+        $remainingMilliseconds = [int][Math]::Floor($TimeoutSeconds * 1000 - $healthTimer.Elapsed.TotalMilliseconds)
+        if ($remainingMilliseconds -gt 0) {
+            Start-Sleep -Milliseconds ([Math]::Min(1000, $remainingMilliseconds))
+        }
+    }
     throw "Health check failed at $HealthUri after $TimeoutSeconds seconds."
 }
 catch {

@@ -9,6 +9,7 @@ $parseErrors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($sourcePath, [ref]$tokens, [ref]$parseErrors)
 if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
 Add-Type -AssemblyName System.ServiceProcess
+Add-Type -AssemblyName System.Net.Http
 
 $native = $ast.Find({
     param($node)
@@ -27,7 +28,14 @@ $sidResolver = $ast.Find({
 Invoke-Expression $sidResolver.Extent.Text
 $realSidResolver = (Get-Item Function:Resolve-AccountSid).ScriptBlock
 Remove-Item Function:Resolve-AccountSid
-foreach ($definition in @($native, $sidResolver) | Sort-Object { $_.Extent.StartOffset } -Descending) {
+$healthRequester = $ast.Find({
+    param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-HealthRequest'
+}, $true)
+Invoke-Expression $healthRequester.Extent.Text
+$realHealthRequester = (Get-Item Function:Invoke-HealthRequest).ScriptBlock
+Remove-Item Function:Invoke-HealthRequest
+foreach ($definition in @($native, $sidResolver, $healthRequester) | Sort-Object { $_.Extent.StartOffset } -Descending) {
     $source = $source.Remove($definition.Extent.StartOffset, $definition.Extent.EndOffset - $definition.Extent.StartOffset)
 }
 $source = $source -replace '(?m)^#Requires.*\r?\n', ''
@@ -119,13 +127,34 @@ function global:Invoke-CimMethod {
     $global:LastCimArguments = $Arguments
     @{ ReturnValue = $global:CimReturnCode }
 }
-function global:Invoke-RestMethod {
-    param($Uri, $Method, $TimeoutSec)
+function global:Invoke-HealthRequest {
+    param($Uri, $TimeoutMilliseconds)
+    Assert-True ($TimeoutMilliseconds -gt 0 -and $TimeoutMilliseconds -le 5000) 'Invalid health request timeout'
+    $global:HealthTimeouts.Add([int]$TimeoutMilliseconds)
     if ($global:FailHealth) { throw 'Mock unhealthy' }
     @{ status = 'ok' }
 }
 
 try {
+    $listener = New-Object Net.Sockets.TcpListener ([Net.IPAddress]::Loopback, 0)
+    $listener.Start()
+    try {
+        $stalledUri = [uri]("http://127.0.0.1:$($listener.LocalEndpoint.Port)/healthz")
+        $timer = [Diagnostics.Stopwatch]::StartNew()
+        $timedOut = $false
+        try { & $realHealthRequester -Uri $stalledUri -TimeoutMilliseconds 150 | Out-Null }
+        catch {
+            $failure = $_.Exception
+            while ($failure.InnerException) { $failure = $failure.InnerException }
+            Assert-True ($failure -is [TimeoutException] -or $failure -is [OperationCanceledException]) 'Stalled HTTP request failed for a reason other than timeout'
+            $timedOut = $true
+        }
+        Assert-True $timedOut 'Stalled HTTP request did not time out'
+        Assert-True ($timer.Elapsed.TotalMilliseconds -ge 100) 'HTTP request failed before exercising the timeout'
+        Assert-True ($timer.Elapsed.TotalMilliseconds -lt 1500) 'HTTP request exceeded its bounded wait'
+    }
+    finally { $listener.Stop() }
+    Write-Host 'PASS: Real stalled HTTP request uses a bounded wait'
     $caller = [Security.Principal.WindowsIdentity]::GetCurrent()
     try {
         Assert-True ((& $realSidResolver $caller.Name) -eq $caller.User.Value) 'Real account SID resolution did not match the caller token'
@@ -158,6 +187,7 @@ $outputPath = $args[0]
     $credential = New-Object System.Management.Automation.PSCredential('ACMUIC\acmmemberportal', (ConvertTo-SecureString $global:TestPassword -AsPlainText -Force))
     $global:Calls = New-Object 'System.Collections.Generic.List[string]'
     $global:Stages = New-Object 'System.Collections.Generic.List[string]'
+    $global:HealthTimeouts = New-Object 'System.Collections.Generic.List[int]'
     $global:Install = Join-Path $temp 'install with spaces'
     $global:NoSdk = $false
     $global:FailBuild = $false
@@ -348,8 +378,10 @@ public static class DeploymentShortPathTest {
     Write-Host 'PASS: Missing SDK fails before modifying host'
     $global:NoSdk = $false
     $global:FailHealth = $true
+    $global:HealthTimeouts.Clear()
     try { & $mockScript -InstallPath $global:Install -ServiceCredential $credential -TimeoutSeconds 1; throw 'Expected health failure' }
     catch { if ($_.Exception.Message -notlike 'Health check failed*') { throw } }
+    Assert-True ($global:HealthTimeouts.Count -gt 0 -and -not ($global:HealthTimeouts | Where-Object { $_ -gt 1000 })) 'Health requests exceeded the one-second remaining budget'
     foreach ($stage in $global:Stages) { Assert-True (-not (Test-Path $stage)) 'Staging files left behind' }
     Write-Host 'PASS: Failed health check fails deployment; staging directories are cleaned'
 }

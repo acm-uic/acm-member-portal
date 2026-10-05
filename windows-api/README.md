@@ -148,8 +148,10 @@ It grants the account Read & execute access and pre-creates `service-boot.log`
 and `startup-error.log` with write access for that account. Existing log contents
 are preserved. It creates or updates `AcmProvisioning`
 with automatic startup and `--windows-service`, starts it, prints its
-registration, and waits for `/healthz` to report `ok`. Updating the registration
-preserves service-specific environment variables. Registration uses the local
+registration, and waits for `/healthz` to report `ok`.
+The health wait uses a monotonic timer and limits requests and retry delays to
+the remaining `TimeoutSeconds` budget. Updating the registration preserves
+service-specific environment variables. Registration uses the local
 `Win32_Service` API so the password is not passed in a child process command line.
 
 To override the installation directory, account, health endpoint, or wait timeout,
