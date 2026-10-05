@@ -83,5 +83,12 @@ export const onPost: RequestHandler = async ({
     data.currentPassword,
     data.newPassword,
   );
-  json(result.ok ? 200 : 400, result);
+  if (result.ok) {
+    json(200, { ok: true });
+    return;
+  }
+  if (result.status === 429) {
+    headers.set("Retry-After", String(result.retryAfter));
+  }
+  json(result.status, { ok: false, error: result.error });
 };

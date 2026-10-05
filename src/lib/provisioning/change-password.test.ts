@@ -63,6 +63,7 @@ describe("changeAdPassword", () => {
         await changeAdPassword("member", "old-secret", "new-secret", send),
       ).toEqual({
         ok: false,
+        status: 502,
         error:
           "Could not confirm the password change. Try signing in with your new password before trying again.",
       });
@@ -79,7 +80,7 @@ describe("changeAdPassword", () => {
       .mockResolvedValue(Response.json({ error }, { status: 400 }));
     expect(
       await changeAdPassword("member", "old-secret", "new-secret", send),
-    ).toEqual({ ok: false, error });
+    ).toEqual({ ok: false, status: 400, error });
   });
 
   it("redacts passwords if an upstream rejection includes them", async () => {
@@ -93,7 +94,11 @@ describe("changeAdPassword", () => {
       );
     expect(
       await changeAdPassword("member", "old-secret", "new-secret", send),
-    ).toEqual({ ok: false, error: "Rejected [redacted] and [redacted]" });
+    ).toEqual({
+      ok: false,
+      status: 400,
+      error: "Rejected [redacted] and [redacted]",
+    });
   });
 
   it.each(["WINDOWS_API_URL", "WINDOWS_API_TOKEN"])(
@@ -101,9 +106,9 @@ describe("changeAdPassword", () => {
     async (key) => {
       vi.stubEnv(key, "");
       const send = vi.fn<typeof fetch>();
-      expect((await changeAdPassword("member", "old", "new", send)).ok).toBe(
-        false,
-      );
+      expect(
+        await changeAdPassword("member", "old", "new", send),
+      ).toMatchObject({ ok: false, status: 503 });
       expect(send).not.toHaveBeenCalled();
     },
   );
@@ -112,20 +117,86 @@ describe("changeAdPassword", () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("WINDOWS_API_URL", "http://directory.example");
     const send = vi.fn<typeof fetch>();
-    expect((await changeAdPassword("member", "old", "new", send)).ok).toBe(
-      false,
-    );
+    expect(await changeAdPassword("member", "old", "new", send)).toMatchObject({
+      ok: false,
+      status: 503,
+    });
     expect(send).not.toHaveBeenCalled();
   });
 
-  it.each([404, 429, 401, 500, 502])(
+  it.each(["not a URL", "ftp://directory.example"])(
+    "reports invalid configuration %s as unavailable before sending passwords",
+    async (url) => {
+      vi.stubEnv("WINDOWS_API_URL", url);
+      const send = vi.fn<typeof fetch>();
+      expect(
+        await changeAdPassword("member", "old", "new", send),
+      ).toMatchObject({
+        ok: false,
+        status: 503,
+      });
+      expect(send).not.toHaveBeenCalled();
+    },
+  );
+
+  it("uses the documented throttling delay without forwarding upstream headers", async () => {
+    const send = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response("private proxy details", {
+        status: 429,
+        headers: { "Retry-After": "arbitrary upstream value" },
+      }),
+    );
+    expect(await changeAdPassword("member", "old", "new", send)).toMatchObject({
+      ok: false,
+      status: 429,
+      retryAfter: 60,
+    });
+  });
+
+  it.each([
+    "private HTML proxy details",
+    '{"error":',
+    "null",
+    "[]",
+    "{}",
+    '{"error":123}',
+    '{"error":""}',
+    '{"error":"   "}',
+  ])(
+    "does not classify invalid HTTP 400 body %s as an AD rejection",
+    async (body) => {
+      const send = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(new Response(body, { status: 400 }));
+      const result = await changeAdPassword(
+        "member",
+        "old-secret",
+        "new-secret",
+        send,
+      );
+      expect(result).toMatchObject({ ok: false, status: 502 });
+      expect(JSON.stringify(result)).not.toContain(
+        "private HTML proxy details",
+      );
+      expect(send).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([404, 429, 401, 403, 500, 502, 503])(
     "handles HTTP %s without exposing arbitrary response bodies",
     async (status) => {
       const send = vi
         .fn<typeof fetch>()
         .mockResolvedValue(new Response("private proxy details", { status }));
       const result = await changeAdPassword("member", "old", "new", send);
-      expect(result.ok).toBe(false);
+      expect(result).toMatchObject({
+        ok: false,
+        status: [401, 403, 503].includes(status)
+          ? 503
+          : status === 500
+            ? 502
+            : status,
+      });
       expect(JSON.stringify(result)).not.toContain("private proxy details");
       if (status === 429)
         expect(JSON.stringify(result)).toContain("Wait a minute");
@@ -144,6 +215,7 @@ describe("changeAdPassword", () => {
     );
     expect(result).toEqual({
       ok: false,
+      status: 502,
       error:
         "Could not confirm the password change. Try signing in with your new password before trying again.",
     });

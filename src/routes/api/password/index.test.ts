@@ -146,10 +146,37 @@ describe("password endpoint", () => {
   it("shows an AD rejection without reflecting submitted passwords", async () => {
     const error =
       "AD password history policy rejected this password (0x8007052D).";
-    mocks.change.mockResolvedValue({ ok: false, error });
+    mocks.change.mockResolvedValue({ ok: false, status: 400, error });
     const { json } = await request();
     expect(json).toHaveBeenCalledWith(400, { ok: false, error });
     expect(JSON.stringify(json.mock.calls)).not.toContain("secret");
+  });
+
+  it.each([400, 404, 502, 503])(
+    "preserves the server failure status %s with the public response body",
+    async (status) => {
+      const error = "Directory failure details";
+      mocks.change.mockResolvedValue({ ok: false, status, error });
+      const { json, responseHeaders } = await request();
+      expect(json).toHaveBeenCalledWith(status, { ok: false, error });
+      expect(responseHeaders.get("retry-after")).toBeNull();
+      expect(responseHeaders.get("cache-control")).toBe("no-store");
+    },
+  );
+
+  it("preserves throttling with the documented retry delay", async () => {
+    const error =
+      "Too many password change attempts. Wait a minute and try again.";
+    mocks.change.mockResolvedValue({
+      ok: false,
+      status: 429,
+      retryAfter: 60,
+      error,
+    });
+    const { json, responseHeaders } = await request();
+    expect(json).toHaveBeenCalledWith(429, { ok: false, error });
+    expect(responseHeaders.get("retry-after")).toBe("60");
+    expect(responseHeaders.get("cache-control")).toBe("no-store");
   });
 
   it("does not contact AD for a deleted account or one without an account name", async () => {
