@@ -164,6 +164,8 @@ To override the installation directory, account, health endpoint, or wait timeou
 
 Use a dedicated installation directory outside the source project. The script
 rejects installation paths equal to, within, or containing the project directory.
+Containment checks use Windows filesystem handles to resolve path aliases,
+including NTFS short names. Device-prefixed installation paths are rejected.
 Deployment removes the installation directory's old files and
 subdirectories except `service-boot.log` and `startup-error.log`, then copies
 the new application files, including `appsettings.json`. Permission grants

@@ -138,6 +138,40 @@ $outputPath = $args[0]
         catch { if ($_.Exception.Message -notlike 'InstallPath must be a dedicated application directory*') { throw } }
         Assert-True ($global:Calls.Count -eq 0) 'Unsafe installation path reached host operations'
     }
+    foreach ($devicePrefix in @('\\?\', '\\.\')) {
+        try { & $mockScript -InstallPath ($devicePrefix + $mockSource) -ServiceCredential $credential; throw 'Expected device path rejection' }
+        catch { if ($_.Exception.Message -ne 'InstallPath must use a regular filesystem path, without a device prefix.') { throw } }
+    }
+    Add-Type -TypeDefinition @'
+using System.Runtime.InteropServices;
+using System.Text;
+public static class DeploymentShortPathTest {
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern uint GetShortPathName(string path, StringBuilder output, uint length);
+}
+'@
+    $shortBuffer = New-Object Text.StringBuilder 32768
+    $shortLength = [DeploymentShortPathTest]::GetShortPathName($mockSource, $shortBuffer, 32768)
+    Assert-True ($shortLength -gt 0 -and $shortLength -lt 32768) 'Could not query the project short path'
+    $shortSource = $shortBuffer.ToString()
+    Assert-True ([AcmDeploymentPaths]::Canonicalize($shortSource) -eq [AcmDeploymentPaths]::Canonicalize($mockSource)) 'Short path canonicalization mismatch'
+    foreach ($unsafePath in @($shortSource, (Join-Path $shortSource 'bin\Release'))) {
+        try { & $mockScript -InstallPath $unsafePath -ServiceCredential $credential; throw 'Expected aliased project path rejection' }
+        catch { if ($_.Exception.Message -notlike 'InstallPath must be a dedicated application directory*') { throw } }
+    }
+    if ($shortSource -eq $mockSource) {
+        Write-Host 'INFO: This volume returned the long path; it did not generate an 8.3 alias for the fixture.'
+    }
+    $sourceJunction = Join-Path $temp 'linked source'
+    New-Item -ItemType Junction -Path $sourceJunction -Target $mockSource | Out-Null
+    try {
+        $aliasedScript = Join-Path $sourceJunction 'deploy.ps1'
+        try { & $aliasedScript -InstallPath $mockSource -ServiceCredential $credential; throw 'Expected aliased source overlap rejection' }
+        catch { if ($_.Exception.Message -notlike 'InstallPath must be a dedicated application directory*') { throw } }
+    }
+    finally { [IO.Directory]::Delete($sourceJunction) }
+    Assert-True ($global:Calls.Count -eq 0) 'Aliased path reached host operations'
+    Write-Host 'PASS: Filesystem-backed aliases resolve consistently and overlapping aliases are rejected'
     $filePath = Join-Path $temp 'not a directory.txt'
     Set-Content $filePath 'preserve this file'
     try { & $mockScript -InstallPath $filePath -ServiceCredential $credential; throw 'Expected file path rejection' }

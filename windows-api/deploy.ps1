@@ -60,7 +60,7 @@ function Invoke-NativeCommand {
 }
 
 function Assert-DeploymentTarget {
-    param([string]$DirectoryPath)
+    param([string]$DirectoryPath, [switch]$AncestorsOnly)
 
     # Lexical path comparisons do not resolve junctions or symbolic links.
     # Reject them in existing ancestors and throughout the installation tree.
@@ -76,7 +76,7 @@ function Assert-DeploymentTarget {
         $component = if ($parent) { $parent.FullName } else { $null }
     }
 
-    if (-not (Test-Path -LiteralPath $DirectoryPath -PathType Container)) {
+    if ($AncestorsOnly -or -not (Test-Path -LiteralPath $DirectoryPath -PathType Container)) {
         return
     }
     $pending = New-Object 'System.Collections.Generic.Stack[string]'
@@ -100,17 +100,76 @@ function Assert-DeploymentTarget {
 if ($env:OS -ne 'Windows_NT') {
     throw 'Run this script on the Windows service host.'
 }
+if ($InstallPath.StartsWith('\\?\') -or $InstallPath.StartsWith('\\.\')) {
+    throw 'InstallPath must use a regular filesystem path, without a device prefix.'
+}
 $InstallPath = [IO.Path]::GetFullPath($InstallPath)
-$installPrefix = $InstallPath.TrimEnd('\') + '\'
-$projectPrefix = ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($projectPath))).TrimEnd('\') + '\'
-if ($InstallPath.TrimEnd('\') -eq ([IO.Path]::GetPathRoot($InstallPath)).TrimEnd('\') -or
-    $projectPrefix.StartsWith($installPrefix, [StringComparison]::OrdinalIgnoreCase) -or
-    $installPrefix.StartsWith($projectPrefix, [StringComparison]::OrdinalIgnoreCase) -or
-    $stagePath.StartsWith($installPrefix, [StringComparison]::OrdinalIgnoreCase)) {
-    throw 'InstallPath must be a dedicated application directory outside the project, not a drive root or a parent of the project or staging directory.'
+if ($InstallPath.TrimEnd('\') -eq ([IO.Path]::GetPathRoot($InstallPath)).TrimEnd('\')) {
+    throw 'InstallPath must be a dedicated application directory outside the project, not a drive or share root.'
 }
 if (Test-Path -LiteralPath $InstallPath -PathType Leaf) {
     throw 'InstallPath must be a directory.'
+}
+Assert-DeploymentTarget $InstallPath -AncestorsOnly
+
+# GetFinalPathNameByHandle expands short names and resolves filesystem aliases.
+# For a new directory, resolve its closest existing parent and append the suffix.
+if (-not ('AcmDeploymentPaths' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
+using Microsoft.Win32.SafeHandles;
+
+public static class AcmDeploymentPaths {
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern SafeFileHandle CreateFile(string path, uint access,
+        uint share, IntPtr security, uint disposition, uint flags, IntPtr template);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint GetFinalPathNameByHandle(SafeFileHandle handle,
+        StringBuilder path, uint length, uint flags);
+
+    public static string Canonicalize(string path) {
+        string parent = Path.GetFullPath(path);
+        var suffix = new List<string>();
+        while (!Directory.Exists(parent)) {
+            if (File.Exists(parent)) throw new IOException("Directory path contains a file: " + parent);
+            var ancestor = Directory.GetParent(parent);
+            if (ancestor == null) throw new DirectoryNotFoundException(parent);
+            suffix.Insert(0, Path.GetFileName(parent.TrimEnd('\\')));
+            parent = ancestor.FullName;
+        }
+        // No data access requested; allow other processes to read/write/delete.
+        using (var handle = CreateFile(parent, 0, 7, IntPtr.Zero, 3, 0x02000000, IntPtr.Zero)) {
+            if (handle.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
+            var buffer = new StringBuilder(512);
+            while (true) {
+                uint length = GetFinalPathNameByHandle(handle, buffer, (uint)buffer.Capacity, 0);
+                if (length == 0) throw new Win32Exception(Marshal.GetLastWin32Error());
+                if (length < buffer.Capacity) break;
+                buffer = new StringBuilder(checked((int)length + 1));
+            }
+            string result = buffer.ToString().TrimEnd('\\');
+            foreach (string part in suffix) result += "\\" + part;
+            return result;
+        }
+    }
+}
+'@
+}
+$installPrefix = [AcmDeploymentPaths]::Canonicalize($InstallPath) + '\'
+$projectPrefix = [AcmDeploymentPaths]::Canonicalize([IO.Path]::GetDirectoryName($projectPath)) + '\'
+$stagePrefix = [AcmDeploymentPaths]::Canonicalize($stagePath) + '\'
+if (
+    $projectPrefix.StartsWith($installPrefix, [StringComparison]::OrdinalIgnoreCase) -or
+    $installPrefix.StartsWith($projectPrefix, [StringComparison]::OrdinalIgnoreCase) -or
+    $stagePrefix.StartsWith($installPrefix, [StringComparison]::OrdinalIgnoreCase) -or
+    $installPrefix.StartsWith($stagePrefix, [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'InstallPath must be a dedicated application directory outside the project, not a drive root or a parent of the project or staging directory.'
 }
 Assert-DeploymentTarget $InstallPath
 $dotnet = (Get-Command dotnet.exe -ErrorAction Stop).Source
