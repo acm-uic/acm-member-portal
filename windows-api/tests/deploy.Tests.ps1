@@ -16,6 +16,9 @@ $native = $ast.Find({
 }, $true)
 Invoke-Expression $native.Extent.Text
 $realNativeCommand = (Get-Item Function:Invoke-NativeCommand).ScriptBlock
+# The round-trip checks invoke the captured block directly. Deployment scenarios
+# must resolve the mock, regardless of the scope used to launch this test script.
+Remove-Item Function:Invoke-NativeCommand
 $source = Get-Content $sourcePath -Raw
 $source = $source.Remove($native.Extent.StartOffset, $native.Extent.EndOffset - $native.Extent.StartOffset)
 $source = $source -replace '(?m)^#Requires.*\r?\n', ''
