@@ -131,7 +131,7 @@ $outputPath = $args[0]
     $global:InvalidLogDuringPublish = $false
     # Missing-SDK fallback keeps these checks harmless if a path guard regresses.
     $global:NoSdk = $true
-    foreach ($unsafePath in @([IO.Path]::GetPathRoot($temp), $temp, $env:TEMP)) {
+    foreach ($unsafePath in @([IO.Path]::GetPathRoot($temp), $temp, $env:TEMP, '\\deployment-test.invalid\share', '\\deployment-test.invalid\share\')) {
         try { & $mockScript -InstallPath $unsafePath -ServiceCredential $credential; throw 'Expected unsafe path rejection' }
         catch { if ($_.Exception.Message -notlike 'InstallPath must be a dedicated application directory*') { throw } }
         Assert-True ($global:Calls.Count -eq 0) 'Unsafe installation path reached host operations'

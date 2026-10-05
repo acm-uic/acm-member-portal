@@ -168,6 +168,7 @@ the new application files, including `appsettings.json`. Permission grants
 replace the service account's existing explicit grants on the installation
 tree and log files. Inherited permissions and group memberships still depend
 on host configuration.
+Drive roots and UNC share roots are rejected, with or without a trailing slash.
 The script rejects junctions and symbolic links in the installation path,
 its existing parents, and its contents. Existing diagnostic log paths must
 be regular files. These checks run before deployment and again after publishing,
