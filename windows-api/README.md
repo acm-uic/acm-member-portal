@@ -144,10 +144,13 @@ environment. The script does not provision AD accounts or configure secrets.
 The script prompts for the `ACMUIC\acmmemberportal` password, cleans and
 publishes a framework-dependent Release build to a temporary directory, then
 stops the existing service and copies the files to `C:\srv\acm-provisioning`.
-It grants the account Read & execute access, creates or updates `AcmProvisioning`
+It grants the account Read & execute access and pre-creates `service-boot.log`
+and `startup-error.log` with write access for that account. Existing log contents
+are preserved. It creates or updates `AcmProvisioning`
 with automatic startup and `--windows-service`, starts it, prints its
 registration, and waits for `/healthz` to report `ok`. Updating the registration
-preserves service-specific environment variables.
+preserves service-specific environment variables. Registration uses the local
+`Win32_Service` API so the password is not passed in a child process command line.
 
 To override the installation directory, account, health endpoint, or wait timeout:
 
@@ -165,6 +168,16 @@ the running service alone. A failure after stopping the service requires fixing
 the reported error and rerunning the script; it does not roll back files.
 The health check confirms HTTP liveness. Run the [AD verification](#verify)
 separately to check account creation and updates.
+
+Run the deployment regression checks in a fresh Windows PowerShell process:
+
+```powershell
+powershell.exe -NoProfile -File .\windows-api\tests\deploy.Tests.ps1
+```
+
+The checks mock service management and native commands, use temporary files,
+and require neither elevation nor a domain account. They cover registration,
+password handling, diagnostic log permissions and preservation, and failure paths.
 
 ### Manual deployment
 

@@ -32,7 +32,7 @@ $projectPath = Join-Path $PSScriptRoot 'AcmProvisioning.csproj'
 $stagePath = Join-Path ([IO.Path]::GetTempPath()) ('acm-provisioning-' + [guid]::NewGuid())
 
 # ProcessStartInfo uses the Windows command-line quoting rules on both
-# Windows PowerShell 5.1 and PowerShell 7, including embedded quotes in binPath.
+# Windows PowerShell 5.1 and PowerShell 7, including paths with spaces.
 function Invoke-NativeCommand {
     param([string]$FilePath, [string[]]$Arguments)
 
@@ -106,19 +106,54 @@ try {
     New-Item -ItemType Directory -Path $InstallPath -Force | Out-Null
     Copy-Item -Path (Join-Path $stagePath '*') -Destination $InstallPath -Recurse -Force
     Invoke-NativeCommand $icacls @($InstallPath, '/grant', "${serviceAccount}:(OI)(CI)RX", '/T')
+    foreach ($logName in @('service-boot.log', 'startup-error.log')) {
+        $logPath = Join-Path $InstallPath $logName
+        if (-not (Test-Path -LiteralPath $logPath)) {
+            New-Item -ItemType File -Path $logPath | Out-Null
+        }
+        Invoke-NativeCommand $icacls @($logPath, '/grant', "${serviceAccount}:W")
+    }
 
     # Configuring an existing service preserves service-specific environment
     # variables and other registration settings. SCM needs the explicit flag.
-    $operation = if ($service) { 'config' } else { 'create' }
+    $operation = if ($service) { 'Change' } else { 'Create' }
     $binaryPath = '"' + (Join-Path $InstallPath 'AcmProvisioning.exe') + '" --windows-service'
     Write-Host "$operation $serviceName as $serviceAccount..."
+    $serviceArguments = @{
+        PathName = $binaryPath
+        StartMode = 'Automatic'
+        StartName = $serviceAccount
+    }
+    if ($service) {
+        $serviceInstance = Get-CimInstance -ClassName Win32_Service -Filter "Name='$serviceName'" -ErrorAction Stop
+        if (-not $serviceInstance) {
+            throw "$serviceName disappeared before its configuration could be updated."
+        }
+    }
+    else {
+        $serviceArguments.Name = $serviceName
+        $serviceArguments.DisplayName = $serviceName
+        $serviceArguments.ServiceType = [byte]16 # Own process
+        $serviceArguments.ErrorControl = [byte]1 # Normal
+    }
+
+    # Pass the password directly to the local service API, never to a child
+    # process command line where process-creation auditing could record it.
     $passwordPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($ServiceCredential.Password)
     try {
-        $password = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($passwordPointer)
-        Invoke-NativeCommand $sc @($operation, $serviceName, 'binPath=', $binaryPath, 'start=', 'auto', 'obj=', $serviceAccount, 'password=', $password)
+        $serviceArguments.StartPassword = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($passwordPointer)
+        if ($service) {
+            $result = Invoke-CimMethod -InputObject $serviceInstance -MethodName Change -Arguments $serviceArguments -ErrorAction Stop
+        }
+        else {
+            $result = Invoke-CimMethod -ClassName Win32_Service -MethodName Create -Arguments $serviceArguments -ErrorAction Stop
+        }
+        if ($result.ReturnValue -ne 0) {
+            throw "Win32_Service.$operation failed with return code $($result.ReturnValue)."
+        }
     }
     finally {
-        $password = $null
+        $serviceArguments.Remove('StartPassword')
         [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($passwordPointer)
     }
 
