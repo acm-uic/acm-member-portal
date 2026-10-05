@@ -14,6 +14,7 @@ public class PasswordErrorsTests
     public void IncorrectPasswordHasUsefulMessage(uint code)
     {
         var error = new TargetInvocationException(new COMException("Incorrect old password", unchecked((int)code)));
+        Assert.True(AdErrors.IsPasswordRejection(error));
         var message = AdErrors.PasswordChangeMessage(error, "old-secret", "new-secret");
         Assert.Contains("Your current password is incorrect.", message);
         Assert.Contains($"0x{code:X8}", message);
@@ -26,12 +27,32 @@ public class PasswordErrorsTests
     public void PolicyRejectionsKeepDirectoryDetails(uint code)
     {
         var error = new TargetInvocationException(new COMException("Directory password history restriction", unchecked((int)code)));
+        Assert.True(AdErrors.IsPasswordRejection(error));
         var message = AdErrors.PasswordChangeMessage(error, "old-secret", "new-secret");
         Assert.Contains("Active Directory rejected the new password.", message);
         Assert.Contains("prevent password reuse", message);
         Assert.Contains("require waiting", message);
         Assert.Contains("Directory password history restriction", message);
         Assert.Contains($"0x{code:X8}", message);
+    }
+
+    [Fact]
+    public void LocalInvocationFailuresAreNotPasswordRejections()
+    {
+        Assert.False(AdErrors.IsPasswordRejection(new MissingMethodException("ChangePassword")));
+        Assert.False(AdErrors.IsPasswordRejection(new TargetInvocationException(new InvalidOperationException("Local invocation failed"))));
+    }
+
+    [Theory]
+    [InlineData(0x8007203Au)] // LDAP server unavailable
+    [InlineData(0x800706BAu)] // RPC server unavailable
+    [InlineData(0x80070005u)] // Access denied, not a password rejection
+    [InlineData(0x80004005u)] // Unspecified failure
+    public void OperationalFailuresAreNotPasswordRejections(uint code)
+    {
+        var error = new COMException("Private directory connection details", unchecked((int)code));
+        Assert.False(AdErrors.IsPasswordRejection(error));
+        Assert.False(AdErrors.IsPasswordRejection(new TargetInvocationException(error)));
     }
 
     [Fact]

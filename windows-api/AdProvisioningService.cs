@@ -183,7 +183,7 @@ public sealed class AdProvisioningService
                 user.Invoke("ChangePassword", req.CurrentPassword, req.NewPassword);
                 return true;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (AdErrors.IsPasswordRejection(ex))
             {
                 throw new PasswordChangeException(AdErrors.PasswordChangeMessage(ex, req.CurrentPassword, req.NewPassword));
             }
@@ -268,6 +268,20 @@ public sealed class AdProvisioningService
 
 internal static class AdErrors
 {
+    public static bool IsPasswordRejection(Exception ex)
+    {
+        // ADSI wraps COM errors in invocation exceptions. Only known credential
+        // and password-policy rejections should become user-visible HTTP 400s.
+        for (var e = ex; e != null; e = e.InnerException)
+        {
+            var code = unchecked((uint)e.HResult);
+            if (code is 0x80070056 or 0x8007052B or 0x8007052E
+                or 0x800708C5 or 0x8007052D or 0x8007202F)
+                return true;
+        }
+        return false;
+    }
+
     public static string PasswordChangeMessage(Exception ex, string currentPassword, string newPassword)
     {
         var hint = "Active Directory rejected the password change.";
