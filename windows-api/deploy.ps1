@@ -59,6 +59,44 @@ function Invoke-NativeCommand {
     }
 }
 
+function Assert-DeploymentTarget {
+    param([string]$DirectoryPath)
+
+    # Lexical path comparisons do not resolve junctions or symbolic links.
+    # Reject them in existing ancestors and throughout the installation tree.
+    $component = $DirectoryPath
+    while ($component) {
+        if (Test-Path -LiteralPath $component) {
+            $item = Get-Item -LiteralPath $component -Force
+            if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                throw "InstallPath contains a reparse point: $component"
+            }
+        }
+        $parent = [IO.Directory]::GetParent($component)
+        $component = if ($parent) { $parent.FullName } else { $null }
+    }
+
+    if (-not (Test-Path -LiteralPath $DirectoryPath -PathType Container)) {
+        return
+    }
+    $pending = New-Object 'System.Collections.Generic.Stack[string]'
+    $pending.Push($DirectoryPath)
+    while ($pending.Count -gt 0) {
+        $directory = $pending.Pop()
+        foreach ($item in Get-ChildItem -LiteralPath $directory -Force) {
+            if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                throw "Installation contains a reparse point: $($item.FullName)"
+            }
+            if ($directory -eq $DirectoryPath -and $item.Name -in @('service-boot.log', 'startup-error.log') -and $item.PSIsContainer) {
+                throw "Diagnostic log path must be a regular file: $($item.FullName)"
+            }
+            if ($item.PSIsContainer) {
+                $pending.Push($item.FullName)
+            }
+        }
+    }
+}
+
 if ($env:OS -ne 'Windows_NT') {
     throw 'Run this script on the Windows service host.'
 }
@@ -72,6 +110,7 @@ if ($installPrefix -eq [IO.Path]::GetPathRoot($InstallPath) -or
 if (Test-Path -LiteralPath $InstallPath -PathType Leaf) {
     throw 'InstallPath must be a directory.'
 }
+Assert-DeploymentTarget $InstallPath
 $dotnet = (Get-Command dotnet.exe -ErrorAction Stop).Source
 $sc = (Get-Command sc.exe -ErrorAction Stop).Source
 $icacls = (Get-Command icacls.exe -ErrorAction Stop).Source
@@ -103,6 +142,7 @@ try {
     if (-not (Test-Path (Join-Path $stagePath 'AcmProvisioning.exe'))) {
         throw 'Publish did not produce AcmProvisioning.exe.'
     }
+    Assert-DeploymentTarget $InstallPath
 
     $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
     if ($service) {

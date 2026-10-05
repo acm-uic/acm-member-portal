@@ -1,6 +1,6 @@
 #Requires -Version 5.1
 # Run in a fresh PowerShell process. Host operations are mocked; no elevation,
-# .NET SDK, AD credentials, or service changes are needed. A temporary executable
+# .NET SDK, AD credentials, or service changes are needed. A temporary Windows script
 # exercises the real native-command helper before the mocked scenarios.
 $ErrorActionPreference = 'Stop'
 $sourcePath = Join-Path (Split-Path $PSScriptRoot -Parent) 'deploy.ps1'
@@ -50,6 +50,9 @@ function global:Invoke-NativeCommand {
         $global:Stages.Add($stage)
         New-Item -ItemType Directory $stage | Out-Null
         Set-Content (Join-Path $stage 'AcmProvisioning.exe') 'mock binary'
+        if ($global:InvalidLogDuringPublish) {
+            New-Item -ItemType Directory -Path (Join-Path $global:Install 'service-boot.log') -Force | Out-Null
+        }
     }
 }
 function global:Get-Service {
@@ -97,27 +100,22 @@ function global:Invoke-RestMethod {
 }
 
 try {
-    $exe = Join-Path $temp 'native arguments.exe'
-    Add-Type -TypeDefinition @'
-using System;
-using System.IO;
-public class NativeArgumentTest {
-    public static int Main(string[] args) {
-        if (args.Length == 1 && args[0] == "fail") return 7;
-        File.WriteAllLines(args[0], new ArraySegment<string>(args, 1, args.Length - 1));
-        return 0;
-    }
-}
-'@ -OutputAssembly $exe -OutputType ConsoleApplication
+    $scriptHost = Join-Path $PSHOME 'powershell.exe'
+    $argumentScript = Join-Path $temp 'native arguments.ps1'
+    Set-Content $argumentScript @'
+if ($args.Count -eq 1 -and $args[0] -eq 'fail') { exit 7 }
+$outputPath = $args[0]
+[IO.File]::WriteAllLines($outputPath, [string[]]$args[1..($args.Count - 1)])
+'@
     $argFile = Join-Path $temp 'arguments.txt'
     $expected = @('path with spaces', '"embedded quotes"', '', '$(literal)` & | <> chars', 'trailing slash\', 'two trailing slashes\\', 'slash before quote\"')
-    & $realNativeCommand $exe (@($argFile) + $expected)
+    & $realNativeCommand $scriptHost (@('-NoProfile', '-NonInteractive', '-File', $argumentScript, $argFile) + $expected)
     $actual = @(Get-Content $argFile)
     Assert-True ($actual.Count -eq $expected.Count) 'Native argument count mismatch'
     for ($i = 0; $i -lt $expected.Count; $i++) {
         Assert-True ($actual[$i] -ceq $expected[$i]) "Native argument mismatch at $i"
     }
-    try { & $realNativeCommand $exe @('fail'); throw 'Expected child process failure' }
+    try { & $realNativeCommand $scriptHost @('-NoProfile', '-NonInteractive', '-File', $argumentScript, 'fail'); throw 'Expected child process failure' }
     catch { if ($_.Exception.Message -notlike '*failed with exit code 7.') { throw } }
     Write-Host 'PASS: Real native helper argument round-trip and nonzero exit handling'
 
@@ -130,6 +128,7 @@ public class NativeArgumentTest {
     $global:FailBuild = $false
     $global:FailHealth = $false
     $global:CimReturnCode = 0
+    $global:InvalidLogDuringPublish = $false
     # Missing-SDK fallback keeps these checks harmless if a path guard regresses.
     $global:NoSdk = $true
     foreach ($unsafePath in @([IO.Path]::GetPathRoot($temp), $temp, $env:TEMP)) {
@@ -141,8 +140,56 @@ public class NativeArgumentTest {
     Set-Content $filePath 'preserve this file'
     try { & $mockScript -InstallPath $filePath -ServiceCredential $credential; throw 'Expected file path rejection' }
     catch { if ($_.Exception.Message -ne 'InstallPath must be a directory.') { throw } }
+
+    $protected = Join-Path $temp 'protected target'
+    New-Item -ItemType Directory -Path (Join-Path $protected 'child') -Force | Out-Null
+    $sentinel = Join-Path $protected 'must survive.txt'
+    Set-Content $sentinel 'protected data'
+    $junction = Join-Path $temp 'linked install'
+    New-Item -ItemType Junction -Path $junction -Target $protected | Out-Null
+    try {
+        foreach ($unsafePath in @($junction, (Join-Path $junction 'child'))) {
+            try { & $mockScript -InstallPath $unsafePath -ServiceCredential $credential; throw 'Expected junction rejection' }
+            catch { if ($_.Exception.Message -notlike 'InstallPath contains a reparse point:*') { throw } }
+        }
+    }
+    finally { [IO.Directory]::Delete($junction) }
+    New-Item -ItemType Directory -Path $global:Install | Out-Null
+    foreach ($logName in @('service-boot.log', 'startup-error.log')) {
+        $logPath = Join-Path $global:Install $logName
+        New-Item -ItemType Directory -Path $logPath | Out-Null
+        try { & $mockScript -InstallPath $global:Install -ServiceCredential $credential; throw 'Expected log directory rejection' }
+        catch { if ($_.Exception.Message -notlike 'Diagnostic log path must be a regular file:*') { throw } }
+        Remove-Item -LiteralPath $logPath
+        New-Item -ItemType Junction -Path $logPath -Target $protected | Out-Null
+        try {
+            try { & $mockScript -InstallPath $global:Install -ServiceCredential $credential; throw 'Expected log junction rejection' }
+            catch { if ($_.Exception.Message -notlike 'Installation contains a reparse point:*') { throw } }
+        }
+        finally { [IO.Directory]::Delete($logPath) }
+    }
+    $nested = Join-Path $global:Install 'nested'
+    New-Item -ItemType Directory $nested | Out-Null
+    $junction = Join-Path $nested 'linked content'
+    New-Item -ItemType Junction -Path $junction -Target $protected | Out-Null
+    try {
+        try { & $mockScript -InstallPath $global:Install -ServiceCredential $credential; throw 'Expected nested junction rejection' }
+        catch { if ($_.Exception.Message -notlike 'Installation contains a reparse point:*') { throw } }
+    }
+    finally { [IO.Directory]::Delete($junction) }
+    Assert-True ($global:Calls.Count -eq 0) 'Invalid target reached host operations'
+    Assert-True ((Get-Content $sentinel -Raw).Trim() -eq 'protected data') 'Junction target was modified'
     $global:NoSdk = $false
-    Write-Host 'PASS: Unsafe installation paths fail before deployment'
+    Write-Host 'PASS: Unsafe paths, junctions, and invalid diagnostic log paths fail before deployment'
+
+    $global:ExistingService = $true
+    $global:InvalidLogDuringPublish = $true
+    try { & $mockScript -InstallPath $global:Install -ServiceCredential $credential; throw 'Expected post-publish validation failure' }
+    catch { if ($_.Exception.Message -notlike 'Diagnostic log path must be a regular file:*') { throw } }
+    Assert-True (-not ($global:Calls -match '^stop\|')) 'Stopped service before post-publish target validation'
+    Remove-Item -LiteralPath (Join-Path $global:Install 'service-boot.log')
+    $global:InvalidLogDuringPublish = $false
+    Write-Host 'PASS: Target is revalidated after publishing before stopping the service'
     foreach ($existing in @($false, $true)) {
         $global:Calls.Clear()
         $global:ExistingService = $existing

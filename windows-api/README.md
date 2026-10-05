@@ -168,6 +168,10 @@ the new application files, including `appsettings.json`. Permission grants
 replace the service account's existing explicit grants on the installation
 tree and log files. Inherited permissions and group memberships still depend
 on host configuration.
+The script rejects junctions and symbolic links in the installation path,
+its existing parents, and its contents. Existing diagnostic log paths must
+be regular files. These checks run before deployment and again after publishing,
+before stopping the service.
 Keep host-specific settings in environment variables. A build failure leaves
 the running service alone. A failure after stopping the service requires fixing
 the reported error and rerunning the script; it does not roll back files.
@@ -180,7 +184,8 @@ Run the deployment regression checks in a fresh Windows PowerShell process:
 powershell.exe -NoProfile -File .\windows-api\tests\deploy.Tests.ps1
 ```
 
-The checks exercise the native command helper with a temporary test executable,
+The checks exercise the native command helper using Windows PowerShell and a
+temporary script,
 then mock service management and native commands for deployment scenarios,
 and require neither elevation nor a domain account. They cover registration,
 password handling, diagnostic log permissions and preservation, obsolete file
