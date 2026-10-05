@@ -1,6 +1,8 @@
 using AcmProvisioning;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.Extensions.Hosting.WindowsServices;
+using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.RateLimiting;
 
 const string ServiceFlag = "--windows-service";
 var asService = args.Any(a => string.Equals(a, ServiceFlag, StringComparison.OrdinalIgnoreCase))
@@ -28,6 +30,24 @@ if (asService)
     }
 }
 builder.Services.AddSingleton<AdProvisioningService>();
+builder.Services.AddRateLimiter(options =>
+{
+    options.AddPolicy("password-change", context => RateLimitPartition.GetFixedWindowLimiter(
+        context.Request.RouteValues["sam"]?.ToString()?.ToUpperInvariant() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 5,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0
+        }));
+    options.OnRejected = async (context, cancellationToken) =>
+    {
+        context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+        context.HttpContext.Response.Headers.RetryAfter = "60";
+        await context.HttpContext.Response.WriteAsJsonAsync(
+            new { error = "Too many password change attempts. Wait a minute and try again." }, cancellationToken);
+    };
+});
 var app = builder.Build();
 
 // Production Kestrel otherwise answers unhandled exceptions with 500 and no body.
@@ -52,6 +72,7 @@ app.UseExceptionHandler(errorApp =>
 
 // Bearer token on everything except /healthz
 app.UseMiddleware<TokenAuthMiddleware>();
+app.UseRateLimiter();
 
 app.MapGet("/healthz", () => Results.Ok(new { status = "ok" }));
 
@@ -112,6 +133,31 @@ app.MapGet("/users/{sam}", async Task<IResult> (string sam, AdProvisioningServic
         return AdFailure(ex);
     }
 });
+
+app.MapPost("/users/{sam}/password", async Task<IResult> (string sam, ChangePasswordRequest req, AdProvisioningService ad, HttpContext context) =>
+{
+    context.Response.Headers.CacheControl = "no-store";
+    if (string.IsNullOrWhiteSpace(sam) || string.IsNullOrEmpty(req.CurrentPassword) || string.IsNullOrEmpty(req.NewPassword))
+        return Results.BadRequest(new { error = "Current and new passwords are required." });
+    if (req.CurrentPassword == req.NewPassword)
+        return Results.BadRequest(new { error = "Choose a new password that differs from your current password." });
+    try
+    {
+        var changed = await ad.ChangePasswordAsync(sam, req);
+        return changed
+            ? Results.Ok(new { ok = true })
+            : Results.NotFound(new { error = "No Active Directory account was found for this username." });
+    }
+    catch (PasswordChangeException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+    catch
+    {
+        // No exception/request logging on a path that handles plaintext passwords.
+        return Results.Json(new { error = "Active Directory is unavailable. Contact ACM support." }, statusCode: 502);
+    }
+}).RequireRateLimiting("password-change");
 
 try
 {

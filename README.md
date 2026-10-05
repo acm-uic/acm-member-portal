@@ -3,6 +3,11 @@
 Qwik City member portal — public signup, officer approval, MS365/Entra SSO,
 Active Directory provisioning, admin configuration, and resources hub.
 
+Members can change their ACM Active Directory password from **Your profile**.
+The form requires the current password and reports AD's password policy
+rejections. Production password changes require an HTTPS Windows API connection.
+See [Windows API configuration](windows-api/README.md) for permissions and rollout checks.
+
 ## Architecture (one screen)
 
 - `src/` — Qwik City SSR app (Fastify runtime)
