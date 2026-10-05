@@ -127,9 +127,9 @@ Environment variables override `appsettings.json`:
 
 ### Deployment script
 
-From an elevated PowerShell session on the Windows host, run the script from
-the checked-out repository. It resolves the project relative to itself, so the
-current directory does not matter:
+From an elevated PowerShell session on the Windows host, run this command from
+the root of the checked-out repository. To launch from another directory, use
+the full path to `deploy.ps1`; it resolves the project relative to itself:
 
 ```powershell
 .\windows-api\deploy.ps1
@@ -162,7 +162,12 @@ To override the installation directory, account, health endpoint, or wait timeou
   -TimeoutSeconds 120
 ```
 
-Publishing replaces deployed application files, including `appsettings.json`.
+Use a dedicated installation directory. Deployment removes its old files and
+subdirectories except `service-boot.log` and `startup-error.log`, then copies
+the new application files, including `appsettings.json`. Permission grants
+replace the service account's existing explicit grants on the installation
+tree and log files. Inherited permissions and group memberships still depend
+on host configuration.
 Keep host-specific settings in environment variables. A build failure leaves
 the running service alone. A failure after stopping the service requires fixing
 the reported error and rerunning the script; it does not roll back files.
@@ -175,9 +180,11 @@ Run the deployment regression checks in a fresh Windows PowerShell process:
 powershell.exe -NoProfile -File .\windows-api\tests\deploy.Tests.ps1
 ```
 
-The checks mock service management and native commands, use temporary files,
+The checks exercise the native command helper with a temporary test executable,
+then mock service management and native commands for deployment scenarios,
 and require neither elevation nor a domain account. They cover registration,
-password handling, diagnostic log permissions and preservation, and failure paths.
+password handling, diagnostic log permissions and preservation, obsolete file
+removal, and failure paths.
 
 ### Manual deployment
 

@@ -63,6 +63,15 @@ if ($env:OS -ne 'Windows_NT') {
     throw 'Run this script on the Windows service host.'
 }
 $InstallPath = [IO.Path]::GetFullPath($InstallPath)
+$installPrefix = $InstallPath.TrimEnd('\') + '\'
+if ($installPrefix -eq [IO.Path]::GetPathRoot($InstallPath) -or
+    ([IO.Path]::GetFullPath($projectPath)).StartsWith($installPrefix, [StringComparison]::OrdinalIgnoreCase) -or
+    $stagePath.StartsWith($installPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'InstallPath must be a dedicated application directory, not a drive root or a parent of the project or staging directory.'
+}
+if (Test-Path -LiteralPath $InstallPath -PathType Leaf) {
+    throw 'InstallPath must be a directory.'
+}
 $dotnet = (Get-Command dotnet.exe -ErrorAction Stop).Source
 $sc = (Get-Command sc.exe -ErrorAction Stop).Source
 $icacls = (Get-Command icacls.exe -ErrorAction Stop).Source
@@ -104,14 +113,18 @@ try {
 
     Write-Host "Installing application files in $InstallPath..."
     New-Item -ItemType Directory -Path $InstallPath -Force | Out-Null
+    # Remove obsolete publish output without erasing diagnostic history.
+    Get-ChildItem -LiteralPath $InstallPath -Force |
+        Where-Object { $_.Name -notin @('service-boot.log', 'startup-error.log') } |
+        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force }
     Copy-Item -Path (Join-Path $stagePath '*') -Destination $InstallPath -Recurse -Force
-    Invoke-NativeCommand $icacls @($InstallPath, '/grant', "${serviceAccount}:(OI)(CI)RX", '/T')
+    Invoke-NativeCommand $icacls @($InstallPath, '/grant:r', "${serviceAccount}:(OI)(CI)RX", '/T')
     foreach ($logName in @('service-boot.log', 'startup-error.log')) {
         $logPath = Join-Path $InstallPath $logName
         if (-not (Test-Path -LiteralPath $logPath)) {
             New-Item -ItemType File -Path $logPath | Out-Null
         }
-        Invoke-NativeCommand $icacls @($logPath, '/grant', "${serviceAccount}:W")
+        Invoke-NativeCommand $icacls @($logPath, '/grant:r', "${serviceAccount}:W")
     }
 
     # Configuring an existing service preserves service-specific environment

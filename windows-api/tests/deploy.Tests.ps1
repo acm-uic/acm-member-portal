@@ -1,6 +1,7 @@
 #Requires -Version 5.1
 # Run in a fresh PowerShell process. Host operations are mocked; no elevation,
-# .NET SDK, AD credentials, or service changes are needed.
+# .NET SDK, AD credentials, or service changes are needed. A temporary executable
+# exercises the real native-command helper before the mocked scenarios.
 $ErrorActionPreference = 'Stop'
 $sourcePath = Join-Path (Split-Path $PSScriptRoot -Parent) 'deploy.ps1'
 $tokens = $null
@@ -13,6 +14,8 @@ $native = $ast.Find({
     param($node)
     $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-NativeCommand'
 }, $true)
+Invoke-Expression $native.Extent.Text
+$realNativeCommand = (Get-Item Function:Invoke-NativeCommand).ScriptBlock
 $source = Get-Content $sourcePath -Raw
 $source = $source.Remove($native.Extent.StartOffset, $native.Extent.EndOffset - $native.Extent.StartOffset)
 $source = $source -replace '(?m)^#Requires.*\r?\n', ''
@@ -94,6 +97,30 @@ function global:Invoke-RestMethod {
 }
 
 try {
+    $exe = Join-Path $temp 'native arguments.exe'
+    Add-Type -TypeDefinition @'
+using System;
+using System.IO;
+public class NativeArgumentTest {
+    public static int Main(string[] args) {
+        if (args.Length == 1 && args[0] == "fail") return 7;
+        File.WriteAllLines(args[0], new ArraySegment<string>(args, 1, args.Length - 1));
+        return 0;
+    }
+}
+'@ -OutputAssembly $exe -OutputType ConsoleApplication
+    $argFile = Join-Path $temp 'arguments.txt'
+    $expected = @('path with spaces', '"embedded quotes"', '', '$(literal)` & | <> chars', 'trailing slash\', 'two trailing slashes\\', 'slash before quote\"')
+    & $realNativeCommand $exe (@($argFile) + $expected)
+    $actual = @(Get-Content $argFile)
+    Assert-True ($actual.Count -eq $expected.Count) 'Native argument count mismatch'
+    for ($i = 0; $i -lt $expected.Count; $i++) {
+        Assert-True ($actual[$i] -ceq $expected[$i]) "Native argument mismatch at $i"
+    }
+    try { & $realNativeCommand $exe @('fail'); throw 'Expected child process failure' }
+    catch { if ($_.Exception.Message -notlike '*failed with exit code 7.') { throw } }
+    Write-Host 'PASS: Real native helper argument round-trip and nonzero exit handling'
+
     $global:TestPassword = 'test password with "quotes" & symbols'
     $credential = New-Object System.Management.Automation.PSCredential('ACMUIC\acmmemberportal', (ConvertTo-SecureString $global:TestPassword -AsPlainText -Force))
     $global:Calls = New-Object 'System.Collections.Generic.List[string]'
@@ -103,10 +130,31 @@ try {
     $global:FailBuild = $false
     $global:FailHealth = $false
     $global:CimReturnCode = 0
+    # Missing-SDK fallback keeps these checks harmless if a path guard regresses.
+    $global:NoSdk = $true
+    foreach ($unsafePath in @([IO.Path]::GetPathRoot($temp), $temp, $env:TEMP)) {
+        try { & $mockScript -InstallPath $unsafePath -ServiceCredential $credential; throw 'Expected unsafe path rejection' }
+        catch { if ($_.Exception.Message -notlike 'InstallPath must be a dedicated application directory*') { throw } }
+        Assert-True ($global:Calls.Count -eq 0) 'Unsafe installation path reached host operations'
+    }
+    $filePath = Join-Path $temp 'not a directory.txt'
+    Set-Content $filePath 'preserve this file'
+    try { & $mockScript -InstallPath $filePath -ServiceCredential $credential; throw 'Expected file path rejection' }
+    catch { if ($_.Exception.Message -ne 'InstallPath must be a directory.') { throw } }
+    $global:NoSdk = $false
+    Write-Host 'PASS: Unsafe installation paths fail before deployment'
     foreach ($existing in @($false, $true)) {
         $global:Calls.Clear()
         $global:ExistingService = $existing
+        if ($existing) {
+            Set-Content (Join-Path $global:Install 'obsolete.json') 'obsolete config'
+            $obsoleteDirectory = Join-Path $global:Install 'obsolete content'
+            New-Item -ItemType Directory $obsoleteDirectory | Out-Null
+            Set-Content (Join-Path $obsoleteDirectory 'old.txt') 'obsolete content'
+        }
         & $mockScript -InstallPath $global:Install -ServiceCredential $credential
+        Assert-True (-not (Test-Path (Join-Path $global:Install 'obsolete.json'))) 'Obsolete file survived deployment'
+        Assert-True (-not (Test-Path (Join-Path $global:Install 'obsolete content'))) 'Obsolete directory survived deployment'
         $operation = if ($existing) { 'Change' } else { 'Create' }
         Assert-True ($global:Calls.Contains("cim|$operation")) 'Missing CIM registration'
         Assert-True (-not $global:LastCimArguments.ContainsKey('StartPassword')) 'Password retained after CIM call'
@@ -115,11 +163,11 @@ try {
         if ($existing) { Assert-True ($global:Calls.Contains('stop|AcmProvisioning')) 'Did not stop existing service' }
         $aclCalls = @($global:Calls | Where-Object { $_ -like 'mock-icacls.exe|*' })
         Assert-True ($aclCalls.Count -eq 3) 'Unexpected permission grants'
-        Assert-True ($aclCalls[0] -ceq "mock-icacls.exe|$global:Install|/grant|ACMUIC\acmmemberportal:(OI)(CI)RX|/T") 'Install directory permissions exceed RX'
+        Assert-True ($aclCalls[0] -ceq "mock-icacls.exe|$global:Install|/grant:r|ACMUIC\acmmemberportal:(OI)(CI)RX|/T") 'Install directory explicit permissions are not replaced with RX'
         foreach ($logName in @('service-boot.log', 'startup-error.log')) {
             $log = Join-Path $global:Install $logName
             Assert-True (Test-Path -LiteralPath $log -PathType Leaf) 'Diagnostic log was not pre-created'
-            Assert-True ($aclCalls -contains "mock-icacls.exe|$log|/grant|ACMUIC\acmmemberportal:W") 'Missing file-only log write permission'
+            Assert-True ($aclCalls -contains "mock-icacls.exe|$log|/grant:r|ACMUIC\acmmemberportal:W") 'Missing replacement file-only log write permission'
             if ($existing) { Assert-True ((Get-Content $log -Raw).Trim() -eq 'existing diagnostic') 'Redeployment erased logs' }
             Set-Content $log 'existing diagnostic'
         }
