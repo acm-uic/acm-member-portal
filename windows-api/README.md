@@ -156,6 +156,87 @@ Environment variables override `appsettings.json`:
 
 ## Deploy
 
+### Deployment script
+
+From an elevated PowerShell session on the Windows host, run this command from
+the root of the checked-out repository. To launch from another directory, use
+the full path to `deploy.ps1`; it resolves the project relative to itself:
+
+```powershell
+.\windows-api\deploy.ps1
+```
+
+Install a .NET 10 SDK on the build host as well as the ASP.NET Core 10 runtime.
+Complete the [service account setup](#service-account), firewall rules, and
+[configuration](#configuration) before the first deployment. Set
+`Provisioning__Token` to the portal's shared token in the machine or service
+environment. The script does not provision AD accounts or configure secrets.
+
+The script prompts for the `ACMUIC\acmmemberportal` password, cleans and
+publishes a framework-dependent Release build to a temporary directory, then
+stops the existing service and copies the files to `C:\srv\acm-provisioning`.
+It grants the account Read & execute access and pre-creates `service-boot.log`
+and `startup-error.log` with write access for that account. Existing log contents
+are preserved. It creates or updates `AcmProvisioning`
+with automatic startup and `--windows-service`, starts it, prints its
+registration, and waits for `/healthz` to report `ok`.
+The health wait uses a monotonic timer and limits requests and retry delays to
+the remaining `TimeoutSeconds` budget. Updating the registration preserves
+service-specific environment variables. Registration uses the local
+`Win32_Service` API so the password is not passed in a child process command line.
+
+To override the installation directory, account, health endpoint, or wait timeout,
+use these parameters. The health endpoint must be an absolute HTTP or HTTPS URI:
+
+```powershell
+.\windows-api\deploy.ps1 `
+  -InstallPath 'D:\ACM Services\provisioning' `
+  -ServiceCredential (Get-Credential 'ACMUIC\acmmemberportal') `
+  -HealthUri 'http://localhost:2433/healthz' `
+  -TimeoutSeconds 120
+```
+
+Use an absolute drive or UNC path to a dedicated installation directory outside
+the source project. Drive-relative forms such as `C:` and `C:folder` are rejected.
+The script rejects installation paths equal to, within, or containing the project directory.
+Containment checks use Windows filesystem handles to resolve path aliases,
+including NTFS short names. Device-prefixed installation paths are rejected.
+Deployment removes the installation directory's old files and
+subdirectories except `service-boot.log` and `startup-error.log`, then copies
+the new application files, including `appsettings.json`. Permission grants
+replace the service account's existing explicit grants on the installation
+tree and log files. Inherited permissions and group memberships still depend
+on host configuration.
+When changing the service identity, the script compares account SIDs and removes
+the former account's explicit grants throughout the installation directory,
+including the logs. Windows' baseline SYSTEM grants are preserved.
+Account SID lookups must succeed before stopping the service.
+Drive roots and UNC share roots are rejected, with or without a trailing slash.
+The script rejects junctions and symbolic links in the installation path,
+its existing parents, and its contents. Existing diagnostic log paths must
+be regular files. These checks run before deployment and again after publishing,
+before stopping the service.
+Keep host-specific settings in environment variables. A build failure leaves
+the running service alone. A failure after stopping the service requires fixing
+the reported error and rerunning the script; it does not roll back files.
+The health check confirms HTTP liveness. Run the [AD verification](#verify)
+separately to check account creation and updates.
+
+Run the deployment regression checks in a fresh Windows PowerShell process:
+
+```powershell
+powershell.exe -NoProfile -File .\windows-api\tests\deploy.Tests.ps1
+```
+
+The checks exercise the native command helper using Windows PowerShell and a
+temporary script,
+then mock service management and native commands for deployment scenarios,
+and require neither elevation nor a domain account. They cover registration,
+password handling, diagnostic log permissions and preservation, obsolete file
+removal, and failure paths.
+
+### Manual deployment
+
 Publish, then register as a Windows service. `binPath` must include `--windows-service`
 so the process reports to SCM. A console Kestrel app will `sc.exe create` successfully,
 then `sc.exe start` fails with **1053**.
