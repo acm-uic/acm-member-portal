@@ -165,8 +165,7 @@ use these parameters. The health endpoint must be an absolute HTTP or HTTPS URI:
 
 Use an absolute drive or UNC path to a dedicated installation directory outside
 the source project. Drive-relative forms such as `C:` and `C:folder` are rejected.
-The script
-rejects installation paths equal to, within, or containing the project directory.
+The script rejects installation paths equal to, within, or containing the project directory.
 Containment checks use Windows filesystem handles to resolve path aliases,
 including NTFS short names. Device-prefixed installation paths are rejected.
 Deployment removes the installation directory's old files and
@@ -175,6 +174,10 @@ the new application files, including `appsettings.json`. Permission grants
 replace the service account's existing explicit grants on the installation
 tree and log files. Inherited permissions and group memberships still depend
 on host configuration.
+When changing the service identity, the script compares account SIDs and removes
+the former account's explicit grants throughout the installation directory,
+including the logs. Windows' baseline SYSTEM grants are preserved.
+Account SID lookups must succeed before stopping the service.
 Drive roots and UNC share roots are rejected, with or without a trailing slash.
 The script rejects junctions and symbolic links in the installation path,
 its existing parents, and its contents. Existing diagnostic log paths must

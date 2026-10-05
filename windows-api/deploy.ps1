@@ -99,6 +99,22 @@ function Assert-DeploymentTarget {
     }
 }
 
+function Resolve-AccountSid {
+    param([string]$AccountName)
+
+    # SCM uses this special name rather than the localized SYSTEM account name.
+    switch ($AccountName) {
+        'LocalSystem' { return 'S-1-5-18' }
+        'NT AUTHORITY\SYSTEM' { return 'S-1-5-18' }
+        'NT AUTHORITY\LocalService' { return 'S-1-5-19' }
+        'NT AUTHORITY\Local Service' { return 'S-1-5-19' }
+        'NT AUTHORITY\NetworkService' { return 'S-1-5-20' }
+        'NT AUTHORITY\Network Service' { return 'S-1-5-20' }
+    }
+    $account = New-Object Security.Principal.NTAccount $AccountName
+    return $account.Translate([Security.Principal.SecurityIdentifier]).Value
+}
+
 if ($env:OS -ne 'Windows_NT') {
     throw 'Run this script on the Windows service host.'
 }
@@ -201,6 +217,11 @@ $serviceAccount = $ServiceCredential.UserName
 if ($serviceAccount -notmatch '^[^\\]+\\[^\\]+$' -and $serviceAccount -notmatch '^[^@]+@[^@]+$') {
     throw 'Use a domain account in DOMAIN\user or user@domain form.'
 }
+$serviceSid = Resolve-AccountSid $serviceAccount
+$builtInServiceSids = @('S-1-5-18', 'S-1-5-19', 'S-1-5-20')
+if ($serviceSid -in $builtInServiceSids) {
+    throw 'Use a dedicated domain service account, not a built-in service identity.'
+}
 
 try {
     Write-Host 'Rebuilding and publishing the application...'
@@ -212,7 +233,13 @@ try {
     Assert-DeploymentTarget $InstallPath
 
     $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+    $previousSid = $null
     if ($service) {
+        $serviceInstance = Get-CimInstance -ClassName Win32_Service -Filter "Name='$serviceName'" -ErrorAction Stop
+        if (-not $serviceInstance) {
+            throw "$serviceName disappeared before its configuration could be updated."
+        }
+        $previousSid = Resolve-AccountSid $serviceInstance.StartName
         Write-Host "Stopping $serviceName..."
         Stop-Service -Name $serviceName -ErrorAction Stop
         $service.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Stopped, [TimeSpan]::FromSeconds($TimeoutSeconds))
@@ -225,6 +252,11 @@ try {
         Where-Object { $_.Name -notin @('service-boot.log', 'startup-error.log') } |
         ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force }
     Copy-Item -Path (Join-Path $stagePath '*') -Destination $InstallPath -Recurse -Force
+    if ($previousSid -and $previousSid -ne $serviceSid -and $previousSid -ne 'S-1-5-18') {
+        # Remove former account grants from the root, files, and preserved logs.
+        # Keep Windows' baseline SYSTEM permissions.
+        Invoke-NativeCommand $icacls @($InstallPath, '/remove:g', "*$previousSid", '/T')
+    }
     Invoke-NativeCommand $icacls @($InstallPath, '/grant:r', "${serviceAccount}:(OI)(CI)RX", '/T')
     foreach ($logName in @('service-boot.log', 'startup-error.log')) {
         $logPath = Join-Path $InstallPath $logName
@@ -244,13 +276,7 @@ try {
         StartMode = 'Automatic'
         StartName = $serviceAccount
     }
-    if ($service) {
-        $serviceInstance = Get-CimInstance -ClassName Win32_Service -Filter "Name='$serviceName'" -ErrorAction Stop
-        if (-not $serviceInstance) {
-            throw "$serviceName disappeared before its configuration could be updated."
-        }
-    }
-    else {
+    if (-not $service) {
         $serviceArguments.Name = $serviceName
         $serviceArguments.DisplayName = $serviceName
         $serviceArguments.ServiceType = [byte]16 # Own process

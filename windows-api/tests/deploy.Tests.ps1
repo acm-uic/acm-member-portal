@@ -20,7 +20,16 @@ $realNativeCommand = (Get-Item Function:Invoke-NativeCommand).ScriptBlock
 # must resolve the mock, regardless of the scope used to launch this test script.
 Remove-Item Function:Invoke-NativeCommand
 $source = Get-Content $sourcePath -Raw
-$source = $source.Remove($native.Extent.StartOffset, $native.Extent.EndOffset - $native.Extent.StartOffset)
+$sidResolver = $ast.Find({
+    param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Resolve-AccountSid'
+}, $true)
+Invoke-Expression $sidResolver.Extent.Text
+$realSidResolver = (Get-Item Function:Resolve-AccountSid).ScriptBlock
+Remove-Item Function:Resolve-AccountSid
+foreach ($definition in @($native, $sidResolver) | Sort-Object { $_.Extent.StartOffset } -Descending) {
+    $source = $source.Remove($definition.Extent.StartOffset, $definition.Extent.EndOffset - $definition.Extent.StartOffset)
+}
 $source = $source -replace '(?m)^#Requires.*\r?\n', ''
 $temp = Join-Path $env:TEMP ('deploy-test-' + [guid]::NewGuid())
 New-Item -ItemType Directory $temp | Out-Null
@@ -78,7 +87,19 @@ function global:Stop-Service {
 function global:Get-CimInstance {
     param($ClassName, $Filter, $ErrorAction)
     Assert-True ($ClassName -eq 'Win32_Service' -and $Filter -eq "Name='AcmProvisioning'") 'Incorrect CIM service query'
-    [pscustomobject]@{ Name = 'AcmProvisioning' }
+    [pscustomobject]@{ Name = 'AcmProvisioning'; StartName = $global:PreviousAccount }
+}
+function global:Resolve-AccountSid {
+    param($AccountName)
+    switch ($AccountName) {
+        'ACMUIC\acmmemberportal' { 'S-1-5-21-100-100-100-1101' }
+        'acmmemberportal@acmuic.org' { 'S-1-5-21-100-100-100-1101' }
+        'ACMUIC\formeraccount' { 'S-1-5-21-100-100-100-1100' }
+        'LocalSystem' { 'S-1-5-18' }
+        'NT AUTHORITY\LocalService' { 'S-1-5-19' }
+        'NT AUTHORITY\NetworkService' { 'S-1-5-20' }
+        default { throw 'Account SID lookup failed' }
+    }
 }
 function global:Invoke-CimMethod {
     param($ClassName, $InputObject, $MethodName, $Arguments, $ErrorAction)
@@ -105,6 +126,15 @@ function global:Invoke-RestMethod {
 }
 
 try {
+    $caller = [Security.Principal.WindowsIdentity]::GetCurrent()
+    try {
+        Assert-True ((& $realSidResolver $caller.Name) -eq $caller.User.Value) 'Real account SID resolution did not match the caller token'
+    }
+    finally { $caller.Dispose() }
+    Assert-True ((& $realSidResolver 'LocalSystem') -eq 'S-1-5-18') 'SCM SYSTEM alias did not resolve'
+    Assert-True ((& $realSidResolver 'NT AUTHORITY\LocalService') -eq 'S-1-5-19') 'SCM LocalService alias did not resolve'
+    Assert-True ((& $realSidResolver 'NT AUTHORITY\NetworkService') -eq 'S-1-5-20') 'SCM NetworkService alias did not resolve'
+    Write-Host 'PASS: Real account SID resolution and SCM built-in aliases'
     $scriptHost = Join-Path $PSHOME 'powershell.exe'
     $argumentScript = Join-Path $temp 'native arguments.ps1'
     Set-Content $argumentScript @'
@@ -133,6 +163,7 @@ $outputPath = $args[0]
     $global:FailBuild = $false
     $global:FailHealth = $false
     $global:CimReturnCode = 0
+    $global:PreviousAccount = 'ACMUIC\acmmemberportal'
     $global:InvalidLogDuringPublish = $false
     # Missing-SDK fallback keeps these checks harmless if a path guard regresses.
     $global:NoSdk = $true
@@ -270,6 +301,30 @@ public static class DeploymentShortPathTest {
         }
         Write-Host "PASS: $operation registration, credential handling, and log permissions"
     }
+    $formerSids = @{
+        'ACMUIC\formeraccount' = 'S-1-5-21-100-100-100-1100'
+        'NT AUTHORITY\LocalService' = 'S-1-5-19'
+        'NT AUTHORITY\NetworkService' = 'S-1-5-20'
+    }
+    foreach ($previousAccount in @('ACMUIC\formeraccount', 'acmmemberportal@acmuic.org', 'LocalSystem', 'NT AUTHORITY\LocalService', 'NT AUTHORITY\NetworkService')) {
+        $global:PreviousAccount = $previousAccount
+        $global:Calls.Clear()
+        & $mockScript -InstallPath $global:Install -ServiceCredential $credential
+        $removals = @($global:Calls | Where-Object { $_ -like 'mock-icacls.exe|*|/remove:g|*' })
+        if ($formerSids.ContainsKey($previousAccount)) {
+            $formerSid = $formerSids[$previousAccount]
+            Assert-True ($removals.Count -eq 1 -and $removals[0] -ceq "mock-icacls.exe|$global:Install|/remove:g|*$formerSid|/T") 'Former service account permissions were not removed recursively by SID'
+        }
+        else { Assert-True ($removals.Count -eq 0) 'Removed grants for an alias of the current account or a built-in identity' }
+    }
+    $global:PreviousAccount = 'ACMUIC\unknownaccount'
+    $global:Calls.Clear()
+    try { & $mockScript -InstallPath $global:Install -ServiceCredential $credential; throw 'Expected SID lookup failure' }
+    catch { if ($_.Exception.Message -ne 'Account SID lookup failed') { throw } }
+    Assert-True (-not ($global:Calls -match '^stop\|')) 'Stopped service before resolving its previous account SID'
+    $global:PreviousAccount = 'ACMUIC\acmmemberportal'
+    Write-Host 'PASS: Former account grants removed by SID; current-account aliases and SYSTEM preserved; lookup failures precede service stop'
+
     $global:CimReturnCode = 22
     $global:Calls.Clear()
     try { & $mockScript -InstallPath $global:Install -ServiceCredential $credential; throw 'Expected CIM failure' }
