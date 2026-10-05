@@ -236,7 +236,7 @@ export default component$(() => {
                           class="px-sm py-2xs rounded-control border border-border-visible text-text1 text-label cursor-pointer whitespace-nowrap"
                           aria-expanded={expandedId.value === s.id}
                           aria-controls={`signup-details-${s.id}`}
-                          aria-label={`${expandedId.value === s.id ? "Hide" : "View"} submission details for ${s.username}`}
+                          aria-label={`${expandedId.value === s.id ? "Hide details" : "View details"} for ${s.username}`}
                           onClick$={() => {
                             expandedId.value =
                               expandedId.value === s.id ? null : s.id;
