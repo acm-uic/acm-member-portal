@@ -186,23 +186,112 @@ describe("compileFormSchema", () => {
 		).toBe(false);
 	});
 
-	it("rejects a username with non-alphanumeric characters", () => {
-		expect(
-			schema.safeParse({ ...validInput, username: "alex_morgan" }).success,
-		).toBe(false);
+	it.each([
+		"alex.morgan",
+		"alex-morgan",
+		"alex_morgan",
+		"alex!morgan",
+		"josé",
+		"alex morgan",
+	])("accepts the allowed username %s", (username) => {
+		expect(schema.safeParse({ ...validInput, username }).success).toBe(true);
 	});
 
-	it("rejects a username longer than 64 characters", () => {
-		expect(
-			schema.safeParse({ ...validInput, username: "a".repeat(65) }).success,
-		).toBe(false);
+	it.each([
+		'"',
+		"/",
+		"\\",
+		"[",
+		"]",
+		":",
+		";",
+		"|",
+		"=",
+		",",
+		"+",
+		"*",
+		"?",
+		"<",
+		">",
+		"@",
+	])("rejects the forbidden username character %s", (character) => {
+		const parsed = schema.safeParse({
+			...validInput,
+			username: `alex${character}morgan`,
+		});
+		expect(parsed.success).toBe(false);
+		if (!parsed.success) {
+			expect(parsed.error.flatten().fieldErrors.username?.[0]).toContain(
+				"cannot contain",
+			);
+		}
 	});
 
-	it("accepts a 64-character alphanumeric username", () => {
+	it.each(["name.", "name..", ".", "...", "name.   "])(
+		"rejects a username ending with a period: %s",
+		(username) => {
+			const parsed = schema.safeParse({ ...validInput, username });
+			expect(parsed.success).toBe(false);
+			if (!parsed.success) {
+				expect(parsed.error.flatten().fieldErrors.username?.[0]).toBe(
+					"Username cannot end with a period",
+				);
+			}
+		},
+	);
+
+	it.each(
+		Array.from({ length: 65 }, (_, index) =>
+			index < 32 ? index : index + 95,
+		),
+	)(
+		"rejects an internal control character with code point %i",
+		(codePoint) => {
+			const parsed = schema.safeParse({
+				...validInput,
+				username: `alex${String.fromCodePoint(codePoint)}morgan`,
+			});
+			expect(parsed.success).toBe(false);
+			if (!parsed.success) {
+				expect(parsed.error.flatten().fieldErrors.username?.[0]).toContain(
+					"cannot contain control characters",
+				);
+			}
+		},
+	);
+
+	it("rejects a username longer than 20 characters", () => {
+		const parsed = schema.safeParse({
+			...validInput,
+			username: "a".repeat(21),
+		});
+		expect(parsed.success).toBe(false);
+		if (!parsed.success) {
+			expect(parsed.error.flatten().fieldErrors.username?.[0]).toBe(
+				"Username must be 20 characters or fewer",
+			);
+		}
+	});
+
+	it("accepts a 20-character username with punctuation", () => {
 		expect(
-			schema.safeParse({ ...validInput, username: "a".repeat(64) }).success,
+			schema.safeParse({ ...validInput, username: "alex.morgan-12345678" })
+				.success,
 		).toBe(true);
 	});
+
+	it.each(["", "   "])(
+		"rejects an empty or whitespace-only username",
+		(username) => {
+			const parsed = schema.safeParse({ ...validInput, username });
+			expect(parsed.success).toBe(false);
+			if (!parsed.success) {
+				expect(parsed.error.flatten().fieldErrors.username?.[0]).toBe(
+					"Username is required",
+				);
+			}
+		},
+	);
 
 	it("rejects a missing username", () => {
 		const { username: _omit, ...rest } = validInput;
