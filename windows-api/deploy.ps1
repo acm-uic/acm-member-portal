@@ -19,6 +19,8 @@ param(
 
     [System.Management.Automation.PSCredential]$ServiceCredential,
 
+    [ValidateNotNullOrEmpty()]
+    [ValidateScript({ $_.IsAbsoluteUri -and $_.Scheme -in @('http', 'https') })]
     [uri]$HealthUri = 'http://localhost:2433/healthz',
 
     [ValidateRange(1, 600)]
@@ -100,6 +102,7 @@ function Assert-DeploymentTarget {
 if ($env:OS -ne 'Windows_NT') {
     throw 'Run this script on the Windows service host.'
 }
+$InstallPath = $InstallPath.Replace('/', '\')
 if ($InstallPath.StartsWith('\\?\') -or $InstallPath.StartsWith('\\.\')) {
     throw 'InstallPath must use a regular filesystem path, without a device prefix.'
 }

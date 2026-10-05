@@ -152,7 +152,8 @@ registration, and waits for `/healthz` to report `ok`. Updating the registration
 preserves service-specific environment variables. Registration uses the local
 `Win32_Service` API so the password is not passed in a child process command line.
 
-To override the installation directory, account, health endpoint, or wait timeout:
+To override the installation directory, account, health endpoint, or wait timeout,
+use these parameters. The health endpoint must be an absolute HTTP or HTTPS URI:
 
 ```powershell
 .\windows-api\deploy.ps1 `

@@ -138,10 +138,16 @@ $outputPath = $args[0]
         catch { if ($_.Exception.Message -notlike 'InstallPath must be a dedicated application directory*') { throw } }
         Assert-True ($global:Calls.Count -eq 0) 'Unsafe installation path reached host operations'
     }
-    foreach ($devicePrefix in @('\\?\', '\\.\')) {
+    foreach ($devicePrefix in @('\\?\', '\\.\', '//?/', '//./', '\\?/', '\\./', '/\?\', '\/?\')) {
         try { & $mockScript -InstallPath ($devicePrefix + $mockSource) -ServiceCredential $credential; throw 'Expected device path rejection' }
         catch { if ($_.Exception.Message -ne 'InstallPath must use a regular filesystem path, without a device prefix.') { throw } }
     }
+    foreach ($invalidHealthUri in @($null, '', 'relative/healthz', 'ftp://localhost/healthz', 'file:///C:/Windows')) {
+        try { & $mockScript -InstallPath $global:Install -ServiceCredential $credential -HealthUri $invalidHealthUri; throw 'Expected health URI validation failure' }
+        catch { if ($_.FullyQualifiedErrorId -notlike 'ParameterArgumentValidationError*') { throw } }
+        Assert-True ($global:Calls.Count -eq 0) 'Invalid health URI reached host operations'
+    }
+    Write-Host 'PASS: Relative, empty, and non-HTTP health URIs fail at parameter binding'
     Add-Type -TypeDefinition @'
 using System.Runtime.InteropServices;
 using System.Text;
