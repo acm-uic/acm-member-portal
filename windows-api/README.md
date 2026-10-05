@@ -125,6 +125,49 @@ Environment variables override `appsettings.json`:
 
 ## Deploy
 
+### Deployment script
+
+From an elevated PowerShell session on the Windows host, run the script from
+the checked-out repository. It resolves the project relative to itself, so the
+current directory does not matter:
+
+```powershell
+.\windows-api\deploy.ps1
+```
+
+Install a .NET 10 SDK on the build host as well as the ASP.NET Core 10 runtime.
+Complete the [service account setup](#service-account), firewall rules, and
+[configuration](#configuration) before the first deployment. Set
+`Provisioning__Token` to the portal's shared token in the machine or service
+environment. The script does not provision AD accounts or configure secrets.
+
+The script prompts for the `ACMUIC\acmmemberportal` password, cleans and
+publishes a framework-dependent Release build to a temporary directory, then
+stops the existing service and copies the files to `C:\srv\acm-provisioning`.
+It grants the account Read & execute access, creates or updates `AcmProvisioning`
+with automatic startup and `--windows-service`, starts it, prints its
+registration, and waits for `/healthz` to report `ok`. Updating the registration
+preserves service-specific environment variables.
+
+To override the installation directory, account, health endpoint, or wait timeout:
+
+```powershell
+.\windows-api\deploy.ps1 `
+  -InstallPath 'D:\ACM Services\provisioning' `
+  -ServiceCredential (Get-Credential 'ACMUIC\acmmemberportal') `
+  -HealthUri 'http://localhost:2433/healthz' `
+  -TimeoutSeconds 120
+```
+
+Publishing replaces deployed application files, including `appsettings.json`.
+Keep host-specific settings in environment variables. A build failure leaves
+the running service alone. A failure after stopping the service requires fixing
+the reported error and rerunning the script; it does not roll back files.
+The health check confirms HTTP liveness. Run the [AD verification](#verify)
+separately to check account creation and updates.
+
+### Manual deployment
+
 Publish, then register as a Windows service. `binPath` must include `--windows-service`
 so the process reports to SCM. A console Kestrel app will `sc.exe create` successfully,
 then `sc.exe start` fails with **1053**.
