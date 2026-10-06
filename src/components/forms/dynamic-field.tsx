@@ -4,10 +4,13 @@ import type { FormFieldDef } from "~/lib/types";
 export const DynamicField = component$<{
 	field: FormFieldDef;
 	error?: string;
+	/** Unique IDs when several forms share the same field keys. */
+	idPrefix?: string;
 	/** Prefill, or posted values after a failed submit. Omit for a blank field. */
 	value?: string | string[];
-}>(({ field, error, value }) => {
-	const describedBy = error ? `${field.key}-error` : undefined;
+}>(({ field, error, value, idPrefix = "" }) => {
+	const id = `${idPrefix}${field.key}`;
+	const describedBy = error ? `${id}-error` : undefined;
 	const hasValue = value !== undefined;
 	const text = typeof value === "string" ? value : "";
 	const selected = Array.isArray(value)
@@ -17,7 +20,7 @@ export const DynamicField = component$<{
 			: [];
 	return (
 		<div class="grid gap-xs min-w-0">
-			<label for={field.key} class="text-label text-text2">
+			<label for={id} class="text-label text-text2">
 				{field.label}
 				{field.required && (
 					<span class="text-accent" aria-hidden="true">
@@ -29,7 +32,7 @@ export const DynamicField = component$<{
 
 			{field.type === "textarea" ? (
 				<textarea
-					id={field.key}
+					id={id}
 					name={field.key}
 					rows={4}
 					placeholder={field.placeholder}
@@ -40,7 +43,7 @@ export const DynamicField = component$<{
 				/>
 			) : field.type === "select" ? (
 				<select
-					id={field.key}
+					id={id}
 					name={field.key}
 					aria-invalid={!!error}
 					aria-describedby={describedBy}
@@ -75,7 +78,7 @@ export const DynamicField = component$<{
 				</fieldset>
 			) : field.type === "checkbox" ? (
 				<input
-					id={field.key}
+					id={id}
 					name={field.key}
 					type="checkbox"
 					value="true"
@@ -85,7 +88,7 @@ export const DynamicField = component$<{
 				/>
 			) : (
 				<input
-					id={field.key}
+					id={id}
 					name={field.key}
 					type={
 						field.type === "email"
@@ -110,7 +113,7 @@ export const DynamicField = component$<{
 			)}
 			{error && (
 				<p
-					id={`${field.key}-error`}
+					id={`${id}-error`}
 					role="alert"
 					class="text-caption text-error m-0"
 				>
