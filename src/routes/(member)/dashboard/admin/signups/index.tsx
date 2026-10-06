@@ -13,6 +13,10 @@ import {
   enqueueProvisioning,
   retryDeadLetter,
 } from "~/lib/provisioning/outbox";
+import { DynamicField } from "~/components/forms/dynamic-field";
+import { signupEditFields, signupEditValues } from "~/lib/forms/signup-edit";
+import { postedValues } from "~/lib/forms/zod-compiler";
+import { saveSignupEdits, type SignupEditResult } from "~/lib/signups/edit";
 import { formatSignupDisplayName } from "~/lib/forms/fields";
 import { submissionAnswers } from "~/lib/forms/submission-answers";
 import type { FormSchemaDefinition } from "~/lib/types";
@@ -56,6 +60,18 @@ export const useSignupQueue = routeLoader$(async (event) => {
     displayName: formatSignupDisplayName(r),
     uin: "uin" in r ? r.uin : null,
     uinRestricted: !includeRestricted,
+    canEdit: perms.has("signups.approve"),
+    editFields: signupEditFields(
+      (schemaDefinition as FormSchemaDefinition | null) ?? { fields: [] },
+      includeRestricted,
+    ),
+    editValues: postedValues(
+      signupEditValues(
+        r,
+        answers as Record<string, unknown>,
+        includeRestricted,
+      ),
+    ),
     answerDetails: submissionAnswers(
       answers as Record<string, unknown>,
       (schemaDefinition as FormSchemaDefinition | null)?.fields ?? [],
@@ -78,6 +94,8 @@ export const useDeadLetters = routeLoader$(async (event) => {
     .orderBy(desc(provisioningEvents.updatedAt))
     .limit(PAGE_SIZE);
 });
+
+export const useEditSignup = routeAction$(saveSignupEdits);
 
 export const useApproveSignup = routeAction$(async (data, event) => {
   const session = await requirePermission(event, "signups.approve");
@@ -167,6 +185,10 @@ export default component$(() => {
   const approve = useApproveSignup();
   const deny = useDenySignup();
   const retry = useRetryProvisioning();
+  const edit = useEditSignup();
+  const editingId = useSignal<string | null>(null);
+  const editResult = useSignal<SignupEditResult | null>(null);
+  const savedId = useSignal<string | null>(null);
   const expandedId = useSignal<string | null>(null);
 
   return (
@@ -233,7 +255,8 @@ export default component$(() => {
                       <div class="flex gap-sm flex-wrap">
                         <button
                           type="button"
-                          class="px-sm py-2xs rounded-control border border-border-visible text-text1 text-label cursor-pointer whitespace-nowrap"
+                          class="px-sm py-2xs rounded-control border border-border-visible text-text1 text-label cursor-pointer whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
+                          disabled={editingId.value !== null || edit.isRunning}
                           aria-expanded={expandedId.value === s.id}
                           aria-controls={`signup-details-${s.id}`}
                           aria-label={`${expandedId.value === s.id ? "Hide details" : "View details"} for ${s.username}`}
@@ -248,7 +271,14 @@ export default component$(() => {
                         </button>
                         <button
                           type="button"
-                          class="px-sm py-2xs rounded-control bg-accent text-white text-label cursor-pointer"
+                          class="px-sm py-2xs rounded-control bg-accent text-white text-label cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                          disabled={
+                            !s.canEdit ||
+                            editingId.value !== null ||
+                            edit.isRunning ||
+                            approve.isRunning ||
+                            deny.isRunning
+                          }
                           onClick$={async () => {
                             await approve.submit({ id: s.id });
                           }}
@@ -257,11 +287,19 @@ export default component$(() => {
                         </button>
                         <button
                           type="button"
-                          class="px-sm py-2xs rounded-control border border-border-visible text-text1 text-label cursor-pointer"
+                          class="px-sm py-2xs rounded-control border border-border-visible text-text1 text-label cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                          disabled={
+                            !s.canEdit ||
+                            editingId.value !== null ||
+                            edit.isRunning ||
+                            approve.isRunning ||
+                            deny.isRunning
+                          }
                           onClick$={async () => {
-                            const reason =
-                              window.prompt("Reason for denial (optional)") ??
-                              "";
+                            const reason = window.prompt(
+                              "Reason for denial (optional)",
+                            );
+                            if (reason === null) return;
                             await deny.submit({ id: s.id, reason });
                           }}
                         >
@@ -288,100 +326,224 @@ export default component$(() => {
                             Submitted {new Date(s.createdAt).toLocaleString()}
                           </p>
                         </header>
-                        <dl class="m-0 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-md">
-                          {[
-                            {
-                              key: "first_name",
-                              label: "First name",
-                              value: s.firstName,
-                            },
-                            {
-                              key: "last_name",
-                              label: "Last name",
-                              value: s.lastName,
-                            },
-                            {
-                              key: "preferred_name",
-                              label: "Preferred name",
-                              value: s.preferredName || "Not provided",
-                            },
-                            { key: "netid", label: "NetID", value: s.netid },
-                            {
-                              key: "username",
-                              label: "Username",
-                              value: s.username,
-                            },
-                            {
-                              key: "email",
-                              label: "Personal email",
-                              value: s.email,
-                            },
-                            {
-                              key: "uin",
-                              label: "UIN",
-                              value: s.uinRestricted
-                                ? "Restricted"
-                                : (s.uin ?? "Not provided"),
-                            },
-                            {
-                              key: "discord_username",
-                              label: "Discord username",
-                              value: s.discordUsername
-                                ? `@${s.discordUsername}`
-                                : "Not linked",
-                            },
-                            {
-                              key: "discord_id",
-                              label: "Discord ID",
-                              value: s.discordId ?? "Not linked",
-                            },
-                            {
-                              key: "discord_in_guild",
-                              label: "In Discord server",
-                              value:
-                                s.discordInGuild === true
-                                  ? "Yes"
-                                  : s.discordInGuild === false
-                                    ? "No"
-                                    : "Unknown",
-                            },
-                          ].map((field) => (
-                            <div
-                              key={field.key}
-                              class="min-w-0 grid gap-2xs content-start"
+                        {s.canEdit && editingId.value !== s.id && (
+                          <div class="flex items-center gap-md">
+                            <button
+                              type="button"
+                              disabled={
+                                approve.isRunning ||
+                                deny.isRunning ||
+                                edit.isRunning
+                              }
+                              class="px-md py-sm rounded-control border border-border-visible text-text1 text-label cursor-pointer disabled:opacity-50"
+                              onClick$={() => {
+                                editingId.value = s.id;
+                                editResult.value = null;
+                                savedId.value = null;
+                              }}
                             >
-                              <dt class="text-caption text-text3">
-                                {field.label}
-                              </dt>
-                              <dd class="m-0 text-body-sm text-text1 whitespace-pre-wrap break-words">
-                                {field.value}
-                              </dd>
-                            </div>
-                          ))}
-                        </dl>
-                        <h3 class="text-label text-text2 m-0 border-t border-border pt-md">
-                          Form answers
-                        </h3>
-                        {s.answerDetails.length === 0 ? (
-                          <p class="text-body-sm text-text3 m-0">
-                            No additional answers submitted.
-                          </p>
-                        ) : (
-                          <dl class="m-0 grid grid-cols-1 sm:grid-cols-2 gap-md">
-                            {s.answerDetails.map((field) => (
-                              <div
-                                key={field.key}
-                                class="min-w-0 grid gap-2xs content-start"
+                              Edit details
+                            </button>
+                            {savedId.value === s.id && (
+                              <span
+                                role="status"
+                                class="text-success text-label"
                               >
-                                <dt class="text-caption text-text3">
-                                  {field.label}
-                                </dt>
-                                <dd class="m-0 text-body-sm text-text1 whitespace-pre-wrap break-words">
-                                  {field.value}
-                                </dd>
-                              </div>
-                            ))}
-                          </dl>
+                                Changes saved.
+                              </span>
+                            )}
+                          </div>
+                        )}
+                        {editingId.value === s.id ? (
+                          <form
+                            preventdefault:submit
+                            noValidate
+                            class="grid gap-md"
+                            onSubmit$={async (event) => {
+                              if (edit.isRunning) return;
+                              const data = new FormData(
+                                event.target as HTMLFormElement,
+                              );
+                              data.set("id", s.id);
+                              editResult.value = null;
+                              try {
+                                const result = await edit.submit(data);
+                                editResult.value = result.value;
+                                if (result.value.ok) {
+                                  editingId.value = null;
+                                  savedId.value = s.id;
+                                }
+                              } catch {
+                                editResult.value = {
+                                  ok: false,
+                                  error:
+                                    "Changes could not be saved. Try again.",
+                                };
+                              }
+                            }}
+                          >
+                            <p class="text-body-sm text-text2 m-0">
+                              Save your changes before approving or denying this
+                              signup. Discord details come from the linked
+                              account and cannot be edited here.
+                            </p>
+                            {s.uinRestricted && (
+                              <p class="text-caption text-text3 m-0">
+                                UIN is restricted and cannot be edited with your
+                                permissions.
+                              </p>
+                            )}
+                            <fieldset
+                              disabled={edit.isRunning}
+                              class="border-0 p-0 m-0 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-md items-start"
+                            >
+                              <legend class="sr-only">Signup details</legend>
+                              {s.editFields.map((field) => (
+                                <DynamicField
+                                  key={field.key}
+                                  idPrefix={`signup-edit-${s.id}-`}
+                                  field={field}
+                                  value={s.editValues[field.key] ?? ""}
+                                  error={
+                                    editResult.value?.ok === false
+                                      ? editResult.value.errors?.[field.key]
+                                      : undefined
+                                  }
+                                />
+                              ))}
+                            </fieldset>
+                            {editResult.value?.ok === false &&
+                              editResult.value.error && (
+                                <p
+                                  role="alert"
+                                  class="text-error text-body-sm m-0"
+                                >
+                                  {editResult.value.error}
+                                </p>
+                              )}
+                            <div class="flex gap-sm">
+                              <button
+                                type="submit"
+                                disabled={edit.isRunning}
+                                class="px-md py-sm rounded-control bg-accent text-white text-label cursor-pointer disabled:opacity-50"
+                              >
+                                {edit.isRunning ? "Saving..." : "Save changes"}
+                              </button>
+                              <button
+                                type="button"
+                                disabled={edit.isRunning}
+                                class="px-md py-sm rounded-control border border-border-visible text-text1 text-label cursor-pointer disabled:opacity-50"
+                                onClick$={() => {
+                                  editingId.value = null;
+                                  editResult.value = null;
+                                }}
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </form>
+                        ) : (
+                          <>
+                            <dl class="m-0 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-md">
+                              {[
+                                {
+                                  key: "first_name",
+                                  label: "First name",
+                                  value: s.firstName,
+                                },
+                                {
+                                  key: "last_name",
+                                  label: "Last name",
+                                  value: s.lastName,
+                                },
+                                {
+                                  key: "preferred_name",
+                                  label: "Preferred name",
+                                  value: s.preferredName || "Not provided",
+                                },
+                                {
+                                  key: "netid",
+                                  label: "NetID",
+                                  value: s.netid,
+                                },
+                                {
+                                  key: "username",
+                                  label: "Username",
+                                  value: s.username,
+                                },
+                                {
+                                  key: "email",
+                                  label: "Personal email",
+                                  value: s.email,
+                                },
+                                {
+                                  key: "uin",
+                                  label: "UIN",
+                                  value: s.uinRestricted
+                                    ? "Restricted"
+                                    : (s.uin ?? "Not provided"),
+                                },
+                                {
+                                  key: "discord_username",
+                                  label: "Discord username",
+                                  value: s.discordUsername
+                                    ? `@${s.discordUsername}`
+                                    : "Not linked",
+                                },
+                                {
+                                  key: "discord_id",
+                                  label: "Discord ID",
+                                  value: s.discordId ?? "Not linked",
+                                },
+                                {
+                                  key: "discord_in_guild",
+                                  label: "In Discord server",
+                                  value:
+                                    s.discordInGuild === true
+                                      ? "Yes"
+                                      : s.discordInGuild === false
+                                        ? "No"
+                                        : "Unknown",
+                                },
+                              ].map((field) => (
+                                <div
+                                  key={field.key}
+                                  class="min-w-0 grid gap-2xs content-start"
+                                >
+                                  <dt class="text-caption text-text3">
+                                    {field.label}
+                                  </dt>
+                                  <dd class="m-0 text-body-sm text-text1 whitespace-pre-wrap break-words">
+                                    {field.value}
+                                  </dd>
+                                </div>
+                              ))}
+                            </dl>
+                            <h3 class="text-label text-text2 m-0 border-t border-border pt-md">
+                              Form answers
+                            </h3>
+                            {s.answerDetails.length === 0 ? (
+                              <p class="text-body-sm text-text3 m-0">
+                                No additional answers submitted.
+                              </p>
+                            ) : (
+                              <dl class="m-0 grid grid-cols-1 sm:grid-cols-2 gap-md">
+                                {s.answerDetails.map((field) => (
+                                  <div
+                                    key={field.key}
+                                    class="min-w-0 grid gap-2xs content-start"
+                                  >
+                                    <dt class="text-caption text-text3">
+                                      {field.label}
+                                    </dt>
+                                    <dd class="m-0 text-body-sm text-text1 whitespace-pre-wrap break-words">
+                                      {field.value}
+                                    </dd>
+                                  </div>
+                                ))}
+                              </dl>
+                            )}
+                          </>
                         )}
                       </section>
                     </td>
@@ -414,7 +576,7 @@ export default component$(() => {
               </div>
               <button
                 type="button"
-                class="px-sm py-2xs rounded-control border border-border-visible text-text1 text-label cursor-pointer"
+                class="px-sm py-2xs rounded-control border border-border-visible text-text1 text-label cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 onClick$={async () => {
                   await retry.submit({ id: e.id });
                 }}
