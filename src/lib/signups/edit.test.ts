@@ -446,7 +446,8 @@ describe("signup edits", () => {
     const expected = {
       ok: false,
       errors: {
-        username: "A pending or approved signup already uses this username.",
+        username:
+          "This username is already in use or reserved by a pending or approved signup.",
       },
     };
     expect(
@@ -479,7 +480,8 @@ describe("signup edits", () => {
     expect(created).toEqual({
       ok: false,
       errors: {
-        username: "A pending or approved signup already uses this username.",
+        username:
+          "This username is already in use or reserved by a pending or approved signup.",
       },
     });
     expect(await db.select().from(tables.signupSubmissions)).toHaveLength(1);
@@ -563,7 +565,7 @@ describe("signup edits", () => {
           ok: false,
           errors: {
             username:
-              "A pending or approved signup already uses this username.",
+              "This username is already in use or reserved by a pending or approved signup.",
           },
         });
         expect(await saved()).toEqual(row);

@@ -330,6 +330,17 @@ export const auditEvents = pgTable(
   (t) => [index("audit_events_target_idx").on(t.targetType, t.targetId)],
 );
 
+/** Shared claims are maintained by database triggers on signups and users. */
+export const usernameClaims = pgTable("username_claims", {
+  username: text("username").primaryKey(),
+  signupSubmissionId: uuid("signup_submission_id")
+    .unique()
+    .references(() => signupSubmissions.id, { onDelete: "set null" }),
+  userId: text("user_id")
+    .unique()
+    .references(() => user.id, { onDelete: "set null" }),
+});
+
 export const provisioningEvents = pgTable(
   "provisioning_events",
   {

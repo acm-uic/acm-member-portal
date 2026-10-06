@@ -145,6 +145,10 @@ describe("applySqlMigrations (PGlite)", () => {
 		await query('INSERT INTO "_migrations" ("name") VALUES ($1)', [
 			"0000_initial.sql",
 		]);
+		// This legacy fixture models only signup data, without member accounts.
+		await query('INSERT INTO "_migrations" ("name") VALUES ($1)', [
+			"0010_shared_username_claims.sql",
+		]);
 
 		await applySqlMigrations(query, { useAdvisoryLock: false });
 
@@ -253,6 +257,7 @@ describe("applySqlMigrations (PGlite)", () => {
 			"0007_signup_pending_identity_uniqueness.sql",
 			"0008_shared_netids.sql",
 			"0009_signup_username_reservations.sql",
+			"0010_shared_username_claims.sql",
 		]) {
 			await query('INSERT INTO "_migrations" ("name") VALUES ($1)', [name]);
 		}

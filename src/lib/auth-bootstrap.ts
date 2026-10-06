@@ -10,6 +10,7 @@ import {
 } from "./db/schema.ts";
 import { discordIdTaken, insertDiscordAccount } from "./discord-link.ts";
 import { formatSignupDisplayName } from "./forms/fields.ts";
+import { attachApprovedSignupClaim } from "./username-claims.ts";
 
 /** Serializes concurrent first logins (distinct from migrate.ts's lock id). */
 const BOOTSTRAP_LOCK_ID = 727_002;
@@ -87,6 +88,7 @@ export async function bootstrapUser(u: {
           ? submissions[0]
           : undefined;
       if (submission) {
+        await attachApprovedSignupClaim(tx, submission, u.id);
         answers = submission.answers as Record<string, unknown>;
         answersSchemaVersionId = submission.schemaVersionId;
 
