@@ -198,6 +198,12 @@ export const signupSubmissions = pgTable(
   },
   (t) => [
     index("signup_submissions_status_idx").on(t.status),
+    uniqueIndex("signup_submissions_pending_netid_key")
+      .on(t.netid)
+      .where(sql`${t.status} = 'pending'`),
+    uniqueIndex("signup_submissions_pending_username_key")
+      .on(t.username)
+      .where(sql`${t.status} = 'pending'`),
     uniqueIndex("signup_submissions_pending_discord_id_key")
       .on(t.discordId)
       .where(sql`${t.status} = 'pending' AND ${t.discordId} IS NOT NULL`),

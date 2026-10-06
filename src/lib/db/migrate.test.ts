@@ -249,6 +249,8 @@ describe("applySqlMigrations (PGlite)", () => {
 			"0002_username.sql",
 			"0003_discord.sql",
 			"0004_sigs.sql",
+			// This account-only fixture has no signup table to index.
+			"0007_signup_pending_identity_uniqueness.sql",
 		]) {
 			await query('INSERT INTO "_migrations" ("name") VALUES ($1)', [name]);
 		}

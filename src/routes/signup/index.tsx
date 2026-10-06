@@ -20,6 +20,7 @@ import { discordIdTaken, discordTakenMessage } from "~/lib/discord-link";
 import { loadPublishedSignupForm } from "~/lib/forms/fields";
 import type { FormFieldDef } from "~/lib/types";
 import { loadSignupDraft, saveSignupDraft } from "~/lib/signup-draft";
+import { createPendingSignup } from "~/lib/signups/create";
 import {
   clientFieldErrors,
   compileFormSchema,
@@ -149,7 +150,7 @@ export const useSubmitSignup = routeAction$(async (data, event) => {
   }
 
   const preferred = base.preferred_name?.trim() || null;
-  await db.insert(signupSubmissions).values({
+  const created = await createPendingSignup({
     schemaVersionId: form.schemaVersionId,
     firstName: base.first_name,
     lastName: base.last_name,
@@ -163,6 +164,7 @@ export const useSubmitSignup = routeAction$(async (data, event) => {
     discordUsername: discord?.username ?? null,
     discordInGuild: discord ? discord.inGuild : null,
   });
+  if (!created.ok) return { ...created, values: postedValues(data) };
 
   event.cookie.delete(DISCORD_SIGNUP_COOKIE, { path: "/" });
 
