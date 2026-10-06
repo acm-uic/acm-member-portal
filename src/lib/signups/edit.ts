@@ -1,5 +1,5 @@
 import type { RequestEventCommon } from "@builder.io/qwik-city";
-import { and, eq, ne } from "drizzle-orm";
+import { and, eq, inArray, ne } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db";
 import {
@@ -17,7 +17,10 @@ import {
 } from "../forms/zod-compiler";
 import { getPermissions, requirePermission } from "../rbac/guards";
 import type { FormSchemaDefinition } from "../types";
-import { pendingSignupConflictErrors } from "./conflicts";
+import {
+  signupUsernameConflictErrors,
+  signupUsernameConflictMessage,
+} from "./conflicts";
 
 export type SignupEditResult =
   { ok: true } | { ok: false; error?: string; errors?: Record<string, string> };
@@ -81,7 +84,7 @@ export async function saveSignupEdits(
     }
     const { base, answers } = splitAnswers(parsed.data);
     const errors: Record<string, string> = {};
-    const pending = await tx
+    const reserved = await tx
       .select({
         username: signupSubmissions.username,
       })
@@ -89,13 +92,11 @@ export async function saveSignupEdits(
       .where(
         and(
           ne(signupSubmissions.id, current.id),
-          eq(signupSubmissions.status, "pending"),
+          inArray(signupSubmissions.status, ["pending", "approved"]),
           eq(signupSubmissions.username, base.username),
         ),
       );
-    if (pending.some((row) => row.username === base.username))
-      errors.username =
-        "A signup with this username is already pending review.";
+    if (reserved.length) errors.username = signupUsernameConflictMessage;
     const accounts = await tx
       .select({ username: user.username })
       .from(user)
@@ -136,7 +137,7 @@ export async function saveSignupEdits(
   });
   return transaction.catch((error: unknown): SignupEditResult => {
     // Catch after rollback, since a constraint violation aborts the transaction.
-    const errors = pendingSignupConflictErrors(error);
+    const errors = signupUsernameConflictErrors(error);
     if (errors) return { ok: false, errors };
     throw error;
   });

@@ -1,6 +1,6 @@
 import { db } from "../db";
 import { signupSubmissions } from "../db/schema";
-import { pendingSignupConflictErrors } from "./conflicts";
+import { signupUsernameConflictErrors } from "./conflicts";
 
 export async function createPendingSignup(
   submission: typeof signupSubmissions.$inferInsert,
@@ -11,7 +11,7 @@ export async function createPendingSignup(
       .values({ ...submission, status: "pending" });
     return { ok: true };
   } catch (error) {
-    const errors = pendingSignupConflictErrors(error);
+    const errors = signupUsernameConflictErrors(error);
     if (errors) return { ok: false, errors };
     throw error;
   }

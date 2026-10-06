@@ -5,6 +5,7 @@ import { applySqlMigrations } from "./migrate";
 
 const migration = "0007_signup_pending_identity_uniqueness.sql";
 const sharedNetids = "0008_shared_netids.sql";
+const usernameReservations = "0009_signup_username_reservations.sql";
 
 describe("signup username uniqueness and shared NetIDs", () => {
   let client: PGlite;
@@ -24,7 +25,8 @@ describe("signup username uniqueness and shared NetIDs", () => {
       if (
         name.endsWith(".sql") &&
         name !== migration &&
-        name !== sharedNetids
+        name !== sharedNetids &&
+        name !== usernameReservations
       ) {
         await client.query("INSERT INTO _migrations (name) VALUES ($1)", [
           name,
@@ -50,7 +52,7 @@ describe("signup username uniqueness and shared NetIDs", () => {
       { useAdvisoryLock: false },
     );
   }
-  it("keeps pending usernames unique while allowing duplicate NetIDs on signups and accounts", async () => {
+  it("reserves pending and approved usernames while allowing duplicate NetIDs on signups and accounts", async () => {
     await client.exec(`INSERT INTO signup_submissions (id, netid, username) VALUES
       ('first', 'shared-netid', 'first-username'), ('second', 'shared-netid', 'second-username');`);
     await migrate();
@@ -61,7 +63,7 @@ describe("signup username uniqueness and shared NetIDs", () => {
       VALUES ('duplicate', 'shared-netid', 'first-username')`),
     ).rejects.toMatchObject({
       code: "23505",
-      constraint: "signup_submissions_pending_username_key",
+      constraint: "signup_submissions_active_username_key",
     });
     await expect(
       client.exec(
@@ -72,17 +74,27 @@ describe("signup username uniqueness and shared NetIDs", () => {
       client.exec(`INSERT INTO "user" (id, netid, username)
       VALUES ('duplicate', 'shared-netid', 'first-username')`),
     ).rejects.toMatchObject({ code: "23505" });
-    await client.exec(`UPDATE signup_submissions SET status = 'approved' WHERE id = 'first';
+    await client.exec(
+      "UPDATE signup_submissions SET status = 'approved' WHERE id = 'first'",
+    );
+    await expect(
+      client.exec(`INSERT INTO signup_submissions (id, netid, username)
+        VALUES ('reused', 'shared-netid', 'first-username')`),
+    ).rejects.toMatchObject({
+      code: "23505",
+      constraint: "signup_submissions_active_username_key",
+    });
+    await client.exec(`UPDATE signup_submissions SET status = 'denied' WHERE id = 'first';
       INSERT INTO signup_submissions (id, netid, username) VALUES ('reused', 'shared-netid', 'first-username');`);
     await migrate();
     expect(
       (
         await client.query(
-          "SELECT name FROM _migrations WHERE name IN ($1, $2)",
-          [migration, sharedNetids],
+          "SELECT name FROM _migrations WHERE name IN ($1, $2, $3)",
+          [migration, sharedNetids, usernameReservations],
         )
       ).rows,
-    ).toHaveLength(2);
+    ).toHaveLength(3);
   });
   it("preserves existing duplicate pending usernames and rolls back until they are resolved", async () => {
     await client.exec(`INSERT INTO signup_submissions (id, netid, username) VALUES
@@ -125,6 +137,74 @@ describe("signup username uniqueness and shared NetIDs", () => {
         (await client.query("SELECT * FROM signup_submissions")).rows,
       ).toHaveLength(2);
       expect((await client.query('SELECT * FROM "user"')).rows).toHaveLength(2);
+    },
+  );
+
+  it("upgrades the pending-only index to retain approved usernames before first login", async () => {
+    await client.exec(`CREATE UNIQUE INDEX signup_submissions_pending_username_key
+      ON signup_submissions (username) WHERE status = 'pending';
+      INSERT INTO signup_submissions (id, netid, username, status)
+      VALUES ('approved', 'shared', 'reserved', 'approved');`);
+    for (const name of [migration, sharedNetids]) {
+      await client.query("INSERT INTO _migrations (name) VALUES ($1)", [name]);
+    }
+    await migrate();
+    await expect(
+      client.exec(`INSERT INTO signup_submissions (id, netid, username)
+      VALUES ('pending', 'shared', 'reserved')`),
+    ).rejects.toMatchObject({
+      code: "23505",
+      constraint: "signup_submissions_active_username_key",
+    });
+    expect((await client.query('SELECT * FROM "user"')).rows).toEqual([]);
+    expect(
+      (
+        await client.query(`SELECT indexname FROM pg_indexes
+      WHERE indexname = 'signup_submissions_pending_username_key'`)
+      ).rows,
+    ).toEqual([]);
+  });
+
+  it.each(["pending", "approved"])(
+    "rolls back conflicting approved and %s username claims without deleting submissions",
+    async (status) => {
+      await client.exec(`CREATE UNIQUE INDEX signup_submissions_pending_username_key
+        ON signup_submissions (username) WHERE status = 'pending';`);
+      await client.query(
+        `INSERT INTO signup_submissions (id, netid, username, status)
+        VALUES ('first', 'shared', 'reserved', 'approved'), ('second', 'shared', 'reserved', $1)`,
+        [status],
+      );
+      for (const name of [migration, sharedNetids]) {
+        await client.query("INSERT INTO _migrations (name) VALUES ($1)", [
+          name,
+        ]);
+      }
+      const before = await client.query(
+        "SELECT * FROM signup_submissions ORDER BY id",
+      );
+      await expect(migrate()).rejects.toMatchObject({ code: "23505" });
+      expect(
+        (await client.query("SELECT * FROM signup_submissions ORDER BY id"))
+          .rows,
+      ).toEqual(before.rows);
+      expect(
+        (
+          await client.query("SELECT name FROM _migrations WHERE name = $1", [
+            usernameReservations,
+          ])
+        ).rows,
+      ).toEqual([]);
+      expect(
+        (
+          await client.query(`SELECT indexname FROM pg_indexes
+        WHERE indexname = 'signup_submissions_pending_username_key'`)
+        ).rows,
+      ).toHaveLength(1);
+      await client.exec(
+        "UPDATE signup_submissions SET status = 'denied' WHERE id = 'second'",
+      );
+      await migrate();
     },
   );
 });

@@ -194,16 +194,16 @@ describe("bootstrapUser Discord copy", () => {
         username,
       });
     }
-    // A more recent application must not replace an already-approved account's details.
+    // A later denied application must not replace the approved account's details.
     await db.insert(signupSubmissions).values({
       schemaVersionId: schema!.id,
-      firstName: "Pending",
+      firstName: "Denied",
       lastName: "Account",
       netid: "alove",
       username: "ada.primary",
-      email: "pending@example.com",
-      answers: { major: "Pending" },
-      status: "pending",
+      email: "denied@example.com",
+      answers: { major: "Denied" },
+      status: "denied",
     });
     for (const [index, username] of [
       "ada.primary",

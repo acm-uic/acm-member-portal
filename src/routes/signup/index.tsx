@@ -1,6 +1,6 @@
 import { $, component$, useSignal, useVisibleTask$ } from "@builder.io/qwik";
 import { routeAction$, routeLoader$ } from "@builder.io/qwik-city";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import {
   DiscordJoinCta,
   discordLinkButtonClass,
@@ -21,6 +21,7 @@ import { loadPublishedSignupForm } from "~/lib/forms/fields";
 import type { FormFieldDef } from "~/lib/types";
 import { loadSignupDraft, saveSignupDraft } from "~/lib/signup-draft";
 import { createPendingSignup } from "~/lib/signups/create";
+import { signupUsernameConflictMessage } from "~/lib/signups/conflicts";
 import {
   clientFieldErrors,
   compileFormSchema,
@@ -87,21 +88,21 @@ export const useSubmitSignup = routeAction$(async (data, event) => {
       )
     : null;
 
-  const [pendingUsername] = await db
+  const [reservedUsername] = await db
     .select({ id: signupSubmissions.id })
     .from(signupSubmissions)
     .where(
       and(
         eq(signupSubmissions.username, base.username),
-        eq(signupSubmissions.status, "pending"),
+        inArray(signupSubmissions.status, ["pending", "approved"]),
       ),
     )
     .limit(1);
-  if (pendingUsername) {
+  if (reservedUsername) {
     return {
       ok: false as const,
       errors: {
-        username: "A signup with this username is already pending review.",
+        username: signupUsernameConflictMessage,
       },
       values: postedValues(data),
     };

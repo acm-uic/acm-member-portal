@@ -429,6 +429,86 @@ describe("signup edits", () => {
     }
   });
 
+  it("blocks creation and edits claiming an approved username before its account exists", async () => {
+    await db.insert(tables.signupSubmissions).values({
+      ...row,
+      id: crypto.randomUUID(),
+      username: input.username,
+      discordId: null,
+      status: "approved",
+    });
+    expect(
+      await db
+        .select()
+        .from(tables.user)
+        .where(eq(tables.user.username, input.username)),
+    ).toEqual([]);
+    const expected = {
+      ok: false,
+      errors: {
+        username: "A pending or approved signup already uses this username.",
+      },
+    };
+    expect(
+      await create({
+        ...row,
+        id: crypto.randomUUID(),
+        username: input.username,
+        discordId: null,
+      }),
+    ).toEqual(expected);
+    expect(await save({ ...input, id: row.id }, event())).toEqual(expected);
+    expect(await saved()).toEqual(row);
+    expect(await db.select().from(tables.auditEvents)).toEqual([]);
+  });
+
+  it("keeps a username reserved while approval races with a new signup", async () => {
+    const [approved, created] = await Promise.all([
+      db.transaction(async (tx) => {
+        const [submission] = await tx
+          .update(tables.signupSubmissions)
+          .set({ status: "approved" })
+          .where(eq(tables.signupSubmissions.id, row.id))
+          .returning();
+        await enqueue(tx, submission!, crypto.randomUUID());
+        return submission;
+      }),
+      create({ ...row, id: crypto.randomUUID(), discordId: null }),
+    ]);
+    expect(approved!.status).toBe("approved");
+    expect(created).toEqual({
+      ok: false,
+      errors: {
+        username: "A pending or approved signup already uses this username.",
+      },
+    });
+    expect(await db.select().from(tables.signupSubmissions)).toHaveLength(1);
+    expect(await db.select().from(tables.provisioningEvents)).toHaveLength(1);
+  });
+
+  it("allows a denied username to be claimed by a new signup or an edit", async () => {
+    await db.insert(tables.signupSubmissions).values({
+      ...row,
+      id: crypto.randomUUID(),
+      username: input.username,
+      status: "denied",
+      discordId: null,
+    });
+    expect(await save({ ...input, id: row.id }, event())).toEqual({ ok: true });
+    await db
+      .update(tables.signupSubmissions)
+      .set({ status: "denied" })
+      .where(eq(tables.signupSubmissions.id, row.id));
+    expect(
+      await create({
+        ...row,
+        id: crypto.randomUUID(),
+        username: input.username,
+        discordId: null,
+      }),
+    ).toEqual({ ok: true });
+  });
+
   it("allows clearing preferred name, checkboxes, and multiselects", async () => {
     const { contact: _contact, interests: _interests, ...unchecked } = input;
     expect(
@@ -458,20 +538,20 @@ describe("signup edits", () => {
     expect(await db.select().from(tables.auditEvents)).toEqual([]);
   });
 
-  it.each(["username"] as const)(
-    "returns a %s field error if another claim appears after the edit's conflict query",
-    async (field) => {
+  it.each(["pending", "approved"] as const)(
+    "returns a username field error if a %s claim appears after the edit's conflict query",
+    async (status) => {
       // Insert a competing claim immediately before UPDATE enforces uniqueness.
       // This makes the earlier SELECT stale without relying on timing or threads.
       await db.execute(
         sql.raw(`CREATE FUNCTION claim_during_edit() RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
           INSERT INTO signup_submissions
-            (schema_version_id, first_name, last_name, netid, username, email, answers)
+            (schema_version_id, first_name, last_name, netid, username, email, answers, status)
           VALUES (NEW.schema_version_id, 'Concurrent', 'Claim',
             'competing-netid',
             NEW.username,
-            'claim@example.com', '{}');
+            'claim@example.com', '{}', '${status}');
           RETURN NEW;
         END; $$`),
       );
@@ -482,7 +562,8 @@ describe("signup edits", () => {
         expect(result).toEqual({
           ok: false,
           errors: {
-            [field]: "A signup with this username is already pending review.",
+            username:
+              "A pending or approved signup already uses this username.",
           },
         });
         expect(await saved()).toEqual(row);
@@ -511,7 +592,7 @@ describe("signup edits", () => {
       });
       expect(result).toMatchObject({
         ok: false,
-        errors: { [field]: expect.stringContaining("pending review") },
+        errors: { [field]: expect.stringContaining("pending or approved") },
       });
       expect(await db.select().from(tables.signupSubmissions)).toHaveLength(1);
     },
@@ -537,7 +618,7 @@ describe("signup edits", () => {
       expect(results.filter((result) => result.ok)).toHaveLength(1);
       expect(results.find((result) => !result.ok)).toMatchObject({
         ok: false,
-        errors: { [field]: expect.stringContaining("pending review") },
+        errors: { [field]: expect.stringContaining("pending or approved") },
       });
       const pending = await db.select().from(tables.signupSubmissions);
       expect(
@@ -562,7 +643,7 @@ describe("signup edits", () => {
       expect(results.filter((result) => result.ok)).toHaveLength(1);
       expect(results.find((result) => !result.ok)).toMatchObject({
         ok: false,
-        errors: { [field]: expect.stringContaining("pending review") },
+        errors: { [field]: expect.stringContaining("pending or approved") },
       });
       const pending = await db.select().from(tables.signupSubmissions);
       expect(
@@ -603,7 +684,7 @@ describe("signup edits", () => {
       expect(results.filter((result) => result.ok)).toHaveLength(1);
       expect(results.find((result) => !result.ok)).toMatchObject({
         ok: false,
-        errors: { [field]: expect.stringContaining("pending review") },
+        errors: { [field]: expect.stringContaining("pending or approved") },
       });
       const pending = await db.select().from(tables.signupSubmissions);
       expect(
