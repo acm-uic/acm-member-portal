@@ -33,7 +33,7 @@ export const user = pgTable(
       .notNull()
       .defaultNow(),
     /* additionalFields — see src/lib/auth.ts user.additionalFields */
-    netid: text("netid").unique(),
+    netid: text("netid"),
     username: text("username").unique(),
     uin: text("uin"),
     firstName: text("first_name"),
@@ -44,7 +44,10 @@ export const user = pgTable(
     discordId: text("discord_id"),
     discordUsername: text("discord_username"),
   },
-  (t) => [uniqueIndex("user_discord_id_key").on(t.discordId)],
+  (t) => [
+    uniqueIndex("user_discord_id_key").on(t.discordId),
+    index("user_netid_idx").on(t.netid),
+  ],
 );
 
 export const session = pgTable("session", {
@@ -198,6 +201,10 @@ export const signupSubmissions = pgTable(
   },
   (t) => [
     index("signup_submissions_status_idx").on(t.status),
+    index("signup_submissions_netid_idx").on(t.netid),
+    uniqueIndex("signup_submissions_active_username_key")
+      .on(t.username)
+      .where(sql`${t.status} IN ('pending', 'approved')`),
     uniqueIndex("signup_submissions_pending_discord_id_key")
       .on(t.discordId)
       .where(sql`${t.status} = 'pending' AND ${t.discordId} IS NOT NULL`),
@@ -322,6 +329,17 @@ export const auditEvents = pgTable(
   },
   (t) => [index("audit_events_target_idx").on(t.targetType, t.targetId)],
 );
+
+/** Shared claims are maintained by database triggers on signups and users. */
+export const usernameClaims = pgTable("username_claims", {
+  username: text("username").primaryKey(),
+  signupSubmissionId: uuid("signup_submission_id")
+    .unique()
+    .references(() => signupSubmissions.id, { onDelete: "set null" }),
+  userId: text("user_id")
+    .unique()
+    .references(() => user.id, { onDelete: "set null" }),
+});
 
 export const provisioningEvents = pgTable(
   "provisioning_events",

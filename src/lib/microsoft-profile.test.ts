@@ -13,6 +13,7 @@ describe("Microsoft profile mapping", () => {
       }),
     ).toEqual({
       netid: "clee231",
+      username: "clee231",
       email: "chase@example.com",
       entraOid: "entra-object-id",
       displayName: "Chase Lee",
@@ -43,7 +44,9 @@ describe("Microsoft profile mapping", () => {
   it.each([undefined, "", "@acmuic.org"])(
     "leaves NetID unset for an empty identifier %j",
     (preferred_username) => {
-      expect(mapMicrosoftProfileToUser({ preferred_username }).netid).toBeNull();
+      expect(
+        mapMicrosoftProfileToUser({ preferred_username }).netid,
+      ).toBeNull();
     },
   );
 });

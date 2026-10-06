@@ -12,6 +12,7 @@ import type { RequestEventCommon } from "@builder.io/qwik-city";
 import type { PortalDb } from "../db";
 import type { FormSchemaDefinition } from "../types";
 import * as tables from "../db/schema";
+import type { createPendingSignup as CreatePendingSignup } from "./create";
 import type { saveSignupEdits as SaveSignupEdits } from "./edit";
 import type { enqueueProvisioning as EnqueueProvisioning } from "../provisioning/outbox";
 import { signupEditFields, signupEditValues } from "../forms/signup-edit";
@@ -105,6 +106,7 @@ function resetDb() {
 describe("signup edits", () => {
   let db: PortalDb;
   let save: typeof SaveSignupEdits;
+  let create: typeof CreatePendingSignup;
   let enqueue: typeof EnqueueProvisioning;
   let schemaId: string;
   let row: typeof tables.signupSubmissions.$inferSelect;
@@ -116,6 +118,7 @@ describe("signup edits", () => {
     vi.resetModules();
     resetDb();
     ({ db } = await import("../db"));
+    ({ createPendingSignup: create } = await import("./create"));
     ({ saveSignupEdits: save } = await import("./edit"));
     ({ enqueueProvisioning: enqueue } = await import("../provisioning/outbox"));
     for (const id of ["admin-test", "approver-test", "reviewer-test"]) {
@@ -386,28 +389,25 @@ describe("signup edits", () => {
     },
   );
 
-  it("blocks NetID and username conflicts with another pending signup", async () => {
-    await db
-      .insert(tables.signupSubmissions)
-      .values({
-        ...row,
-        id: crypto.randomUUID(),
-        netid: input.netid,
-        username: input.username,
-        discordId: null,
-      });
+  it("blocks username conflicts with another pending signup", async () => {
+    await db.insert(tables.signupSubmissions).values({
+      ...row,
+      id: crypto.randomUUID(),
+      netid: input.netid,
+      username: input.username,
+      discordId: null,
+    });
     const result = await save({ ...input, id: row.id }, event());
     expect(result).toMatchObject({
       ok: false,
       errors: {
-        netid: expect.stringContaining("pending"),
         username: expect.stringContaining("pending"),
       },
     });
     expect(await saved()).toEqual(row);
   });
 
-  it("blocks NetID and username conflicts with existing accounts", async () => {
+  it("blocks username conflicts with existing accounts", async () => {
     await db
       .update(tables.user)
       .set({ netid: input.netid, username: input.username })
@@ -417,7 +417,6 @@ describe("signup edits", () => {
       expect(result).toMatchObject({
         ok: false,
         errors: {
-          netid: expect.stringContaining("already in use"),
           username: expect.stringContaining("already in use"),
         },
       });
@@ -428,6 +427,88 @@ describe("signup edits", () => {
         .set({ netid: null, username: null })
         .where(eq(tables.user.id, "reviewer-test"));
     }
+  });
+
+  it("blocks creation and edits claiming an approved username before its account exists", async () => {
+    await db.insert(tables.signupSubmissions).values({
+      ...row,
+      id: crypto.randomUUID(),
+      username: input.username,
+      discordId: null,
+      status: "approved",
+    });
+    expect(
+      await db
+        .select()
+        .from(tables.user)
+        .where(eq(tables.user.username, input.username)),
+    ).toEqual([]);
+    const expected = {
+      ok: false,
+      errors: {
+        username:
+          "This username is already in use or reserved by a pending or approved signup.",
+      },
+    };
+    expect(
+      await create({
+        ...row,
+        id: crypto.randomUUID(),
+        username: input.username,
+        discordId: null,
+      }),
+    ).toEqual(expected);
+    expect(await save({ ...input, id: row.id }, event())).toEqual(expected);
+    expect(await saved()).toEqual(row);
+    expect(await db.select().from(tables.auditEvents)).toEqual([]);
+  });
+
+  it("keeps a username reserved while approval races with a new signup", async () => {
+    const [approved, created] = await Promise.all([
+      db.transaction(async (tx) => {
+        const [submission] = await tx
+          .update(tables.signupSubmissions)
+          .set({ status: "approved" })
+          .where(eq(tables.signupSubmissions.id, row.id))
+          .returning();
+        await enqueue(tx, submission!, crypto.randomUUID());
+        return submission;
+      }),
+      create({ ...row, id: crypto.randomUUID(), discordId: null }),
+    ]);
+    expect(approved!.status).toBe("approved");
+    expect(created).toEqual({
+      ok: false,
+      errors: {
+        username:
+          "This username is already in use or reserved by a pending or approved signup.",
+      },
+    });
+    expect(await db.select().from(tables.signupSubmissions)).toHaveLength(1);
+    expect(await db.select().from(tables.provisioningEvents)).toHaveLength(1);
+  });
+
+  it("allows a denied username to be claimed by a new signup or an edit", async () => {
+    await db.insert(tables.signupSubmissions).values({
+      ...row,
+      id: crypto.randomUUID(),
+      username: input.username,
+      status: "denied",
+      discordId: null,
+    });
+    expect(await save({ ...input, id: row.id }, event())).toEqual({ ok: true });
+    await db
+      .update(tables.signupSubmissions)
+      .set({ status: "denied" })
+      .where(eq(tables.signupSubmissions.id, row.id));
+    expect(
+      await create({
+        ...row,
+        id: crypto.randomUUID(),
+        username: input.username,
+        discordId: null,
+      }),
+    ).toEqual({ ok: true });
   });
 
   it("allows clearing preferred name, checkboxes, and multiselects", async () => {
@@ -457,6 +538,284 @@ describe("signup edits", () => {
     ).toEqual({ ok: true });
     expect(await saved()).toEqual(row);
     expect(await db.select().from(tables.auditEvents)).toEqual([]);
+  });
+
+  it.each(["pending", "approved"] as const)(
+    "returns a username field error if a %s claim appears after the edit's conflict query",
+    async (status) => {
+      // Insert a competing claim immediately before UPDATE enforces uniqueness.
+      // This makes the earlier SELECT stale without relying on timing or threads.
+      await db.execute(
+        sql.raw(`CREATE FUNCTION claim_during_edit() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          INSERT INTO signup_submissions
+            (schema_version_id, first_name, last_name, netid, username, email, answers, status)
+          VALUES (NEW.schema_version_id, 'Concurrent', 'Claim',
+            'competing-netid',
+            NEW.username,
+            'claim@example.com', '{}', '${status}');
+          RETURN NEW;
+        END; $$`),
+      );
+      await db.execute(sql`CREATE TRIGGER claim_during_edit BEFORE UPDATE ON signup_submissions
+        FOR EACH ROW EXECUTE FUNCTION claim_during_edit()`);
+      try {
+        const result = await save({ ...input, id: row.id }, event());
+        expect(result).toEqual({
+          ok: false,
+          errors: {
+            username:
+              "This username is already in use or reserved by a pending or approved signup.",
+          },
+        });
+        expect(await saved()).toEqual(row);
+        expect(await db.select().from(tables.auditEvents)).toEqual([]);
+        expect(await db.select().from(tables.signupSubmissions)).toHaveLength(
+          1,
+        );
+      } finally {
+        await db.execute(
+          sql`DROP TRIGGER claim_during_edit ON signup_submissions`,
+        );
+        await db.execute(sql`DROP FUNCTION claim_during_edit()`);
+      }
+    },
+  );
+
+  it.each(["username"] as const)(
+    "rejects a duplicate %s in signup creation even without a prior conflict query",
+    async (field) => {
+      const result = await create({
+        ...row,
+        id: crypto.randomUUID(),
+        discordId: null,
+        netid: "new-netid",
+        username: field === "username" ? row.username : "new-username",
+      });
+      expect(result).toMatchObject({
+        ok: false,
+        errors: { [field]: expect.stringContaining("pending or approved") },
+      });
+      expect(await db.select().from(tables.signupSubmissions)).toHaveLength(1);
+    },
+  );
+
+  it.each(["username"] as const)(
+    "allows only one pending %s when two signups are submitted together",
+    async (field) => {
+      const results = await Promise.all(
+        [0, 1].map((index) =>
+          create({
+            ...row,
+            id: crypto.randomUUID(),
+            discordId: null,
+            netid: `new-netid-${index}`,
+            username:
+              field === "username"
+                ? "shared-username"
+                : `new-username-${index}`,
+          }),
+        ),
+      );
+      expect(results.filter((result) => result.ok)).toHaveLength(1);
+      expect(results.find((result) => !result.ok)).toMatchObject({
+        ok: false,
+        errors: { [field]: expect.stringContaining("pending or approved") },
+      });
+      const pending = await db.select().from(tables.signupSubmissions);
+      expect(
+        pending.filter((submission) => submission[field] === `shared-${field}`),
+      ).toHaveLength(1);
+    },
+  );
+
+  it.each(["username"] as const)(
+    "protects a %s claim across a new signup and a concurrent edit",
+    async (field) => {
+      const results = await Promise.all([
+        create({
+          ...row,
+          id: crypto.randomUUID(),
+          discordId: null,
+          netid: "new-netid",
+          username: field === "username" ? input.username : "new-username",
+        }),
+        save({ ...input, id: row.id }, event()),
+      ]);
+      expect(results.filter((result) => result.ok)).toHaveLength(1);
+      expect(results.find((result) => !result.ok)).toMatchObject({
+        ok: false,
+        errors: { [field]: expect.stringContaining("pending or approved") },
+      });
+      const pending = await db.select().from(tables.signupSubmissions);
+      expect(
+        pending.filter((submission) => submission[field] === input[field]),
+      ).toHaveLength(1);
+    },
+  );
+
+  it.each(["username"] as const)(
+    "allows only one of two admins to claim the same pending %s",
+    async (field) => {
+      const [second] = await db
+        .insert(tables.signupSubmissions)
+        .values({
+          ...row,
+          id: crypto.randomUUID(),
+          netid: "second-netid",
+          username: "second-username",
+          discordId: null,
+        })
+        .returning();
+      const results = await Promise.all(
+        [row, second!].map((submission, index) =>
+          save(
+            {
+              ...input,
+              id: submission.id,
+              netid: `changed-netid-${index}`,
+              username:
+                field === "username"
+                  ? input.username
+                  : `changed-username-${index}`,
+            },
+            event(),
+          ),
+        ),
+      );
+      expect(results.filter((result) => result.ok)).toHaveLength(1);
+      expect(results.find((result) => !result.ok)).toMatchObject({
+        ok: false,
+        errors: { [field]: expect.stringContaining("pending or approved") },
+      });
+      const pending = await db.select().from(tables.signupSubmissions);
+      expect(
+        pending.filter((submission) => submission[field] === input[field]),
+      ).toHaveLength(1);
+      expect(await db.select().from(tables.auditEvents)).toHaveLength(1);
+    },
+  );
+
+  it("allows creation and edits that share a pending or existing member NetID", async () => {
+    await db
+      .update(tables.user)
+      .set({ netid: row.netid })
+      .where(eq(tables.user.id, "reviewer-test"));
+    try {
+      expect(
+        await create({
+          ...row,
+          id: crypto.randomUUID(),
+          username: "second-account",
+          discordId: null,
+        }),
+      ).toEqual({ ok: true });
+      expect(
+        await save({ ...input, netid: row.netid, id: row.id }, event()),
+      ).toEqual({ ok: true });
+      const pending = await db.select().from(tables.signupSubmissions);
+      expect(pending.map((submission) => submission.netid)).toEqual([
+        row.netid,
+        row.netid,
+      ]);
+      expect(
+        new Set(pending.map((submission) => submission.username)).size,
+      ).toBe(2);
+    } finally {
+      await db
+        .update(tables.user)
+        .set({ netid: null })
+        .where(eq(tables.user.id, "reviewer-test"));
+    }
+  });
+
+  it("approves and provisions two submissions with the same NetID as distinct usernames", async () => {
+    const [second] = await db
+      .insert(tables.signupSubmissions)
+      .values({
+        ...row,
+        id: crypto.randomUUID(),
+        username: "second-account",
+        discordId: null,
+      })
+      .returning();
+    for (const submission of [row, second!]) {
+      await db.transaction(async (tx) => {
+        const [approved] = await tx
+          .update(tables.signupSubmissions)
+          .set({ status: "approved" })
+          .where(eq(tables.signupSubmissions.id, submission.id))
+          .returning();
+        await enqueue(tx, approved!, crypto.randomUUID());
+      });
+    }
+    const jobs = await db.select().from(tables.provisioningEvents);
+    expect(jobs).toHaveLength(2);
+    expect(jobs.map((job) => (job.payload as { netid: string }).netid)).toEqual(
+      [row.netid, row.netid],
+    );
+    expect(
+      new Set(
+        jobs.map((job) => (job.payload as { username: string }).username),
+      ),
+    ).toEqual(new Set([row.username, "second-account"]));
+  });
+
+  it("marks shared NetIDs across pending signups, approved signups, and member accounts, but ignores denied ones", async () => {
+    const { duplicateSignupNetid } = await import("./duplicates");
+    const duplicates = () =>
+      db
+        .select({
+          id: tables.signupSubmissions.id,
+          duplicateNetid: duplicateSignupNetid,
+        })
+        .from(tables.signupSubmissions)
+        .where(eq(tables.signupSubmissions.id, row.id));
+    expect((await duplicates())[0]!.duplicateNetid).toBe(false);
+    const [second] = await db
+      .insert(tables.signupSubmissions)
+      .values({
+        ...row,
+        id: crypto.randomUUID(),
+        username: "second-account",
+        discordId: null,
+      })
+      .returning();
+    expect((await duplicates())[0]!.duplicateNetid).toBe(true);
+    await db
+      .update(tables.signupSubmissions)
+      .set({ status: "approved" })
+      .where(eq(tables.signupSubmissions.id, second!.id));
+    expect((await duplicates())[0]!.duplicateNetid).toBe(true);
+    await db
+      .update(tables.signupSubmissions)
+      .set({ status: "denied" })
+      .where(eq(tables.signupSubmissions.id, second!.id));
+    expect((await duplicates())[0]!.duplicateNetid).toBe(false);
+    await db
+      .update(tables.user)
+      .set({ netid: row.netid })
+      .where(eq(tables.user.id, "reviewer-test"));
+    try {
+      expect((await duplicates())[0]!.duplicateNetid).toBe(true);
+    } finally {
+      await db
+        .update(tables.user)
+        .set({ netid: null })
+        .where(eq(tables.user.id, "reviewer-test"));
+    }
+  });
+
+  it("does not hide an unrelated creation failure as an identity conflict", async () => {
+    await expect(
+      create({
+        ...row,
+        id: crypto.randomUUID(),
+        netid: "new-netid",
+        username: "new-username",
+      }),
+    ).rejects.toThrow(); // Duplicate verified Discord ID is a different constraint.
+    expect(await db.select().from(tables.signupSubmissions)).toHaveLength(1);
   });
 
   it("rolls back the edit when its audit event cannot be saved", async () => {

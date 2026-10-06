@@ -12,6 +12,7 @@ export function mapMicrosoftProfileToUser(profile: MicrosoftProfile) {
 
   return {
     netid,
+    username: netid,
     entraOid: profile.oid ?? null,
     displayName: profile.name ?? null,
     email: profile.email ?? profile.preferred_username,

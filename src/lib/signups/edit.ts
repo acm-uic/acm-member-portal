@@ -1,5 +1,5 @@
 import type { RequestEventCommon } from "@builder.io/qwik-city";
-import { and, eq, ne, or } from "drizzle-orm";
+import { and, eq, inArray, ne } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db";
 import {
@@ -17,6 +17,10 @@ import {
 } from "../forms/zod-compiler";
 import { getPermissions, requirePermission } from "../rbac/guards";
 import type { FormSchemaDefinition } from "../types";
+import {
+  signupUsernameConflictErrors,
+  signupUsernameConflictMessage,
+} from "./conflicts";
 
 export type SignupEditResult =
   { ok: true } | { ok: false; error?: string; errors?: Record<string, string> };
@@ -31,7 +35,7 @@ export async function saveSignupEdits(
   const id = z.uuid().safeParse(data.id);
   if (!id.success) return { ok: false, error: "Submission was not found." };
 
-  return db.transaction(async (tx) => {
+  const transaction = db.transaction<SignupEditResult>(async (tx) => {
     // Approval/denial must wait for this edit to commit before reading the row.
     const [current] = await tx
       .select()
@@ -80,33 +84,23 @@ export async function saveSignupEdits(
     }
     const { base, answers } = splitAnswers(parsed.data);
     const errors: Record<string, string> = {};
-    const pending = await tx
+    const reserved = await tx
       .select({
-        netid: signupSubmissions.netid,
         username: signupSubmissions.username,
       })
       .from(signupSubmissions)
       .where(
         and(
           ne(signupSubmissions.id, current.id),
-          eq(signupSubmissions.status, "pending"),
-          or(
-            eq(signupSubmissions.netid, base.netid),
-            eq(signupSubmissions.username, base.username),
-          ),
+          inArray(signupSubmissions.status, ["pending", "approved"]),
+          eq(signupSubmissions.username, base.username),
         ),
       );
-    if (pending.some((row) => row.netid === base.netid))
-      errors.netid = "A signup with this NetID is already pending review.";
-    if (pending.some((row) => row.username === base.username))
-      errors.username =
-        "A signup with this username is already pending review.";
+    if (reserved.length) errors.username = signupUsernameConflictMessage;
     const accounts = await tx
-      .select({ netid: user.netid, username: user.username })
+      .select({ username: user.username })
       .from(user)
-      .where(or(eq(user.netid, base.netid), eq(user.username, base.username)));
-    if (accounts.some((row) => row.netid === base.netid))
-      errors.netid = "This NetID is already in use.";
+      .where(eq(user.username, base.username));
     if (accounts.some((row) => row.username === base.username))
       errors.username = "This username is already in use.";
     if (Object.keys(errors).length) return { ok: false, errors };
@@ -140,5 +134,11 @@ export async function saveSignupEdits(
       });
     }
     return { ok: true };
+  });
+  return transaction.catch((error: unknown): SignupEditResult => {
+    // Catch after rollback, since a constraint violation aborts the transaction.
+    const errors = signupUsernameConflictErrors(error);
+    if (errors) return { ok: false, errors };
+    throw error;
   });
 }
