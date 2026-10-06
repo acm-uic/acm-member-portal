@@ -1,4 +1,4 @@
-import { desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "./db/index.ts";
 import { isEmbeddedDb } from "./db/mode.ts";
 import {
@@ -28,7 +28,7 @@ const ROLE_IDS = {
  *
  *  - First registered user (count == 1, the just-created row) → admin + member.
  *  - Everyone else → member.
- *  - If an approved signup submission exists for the user's netid, its answers
+ *  - Match an approved signup by username, or an unambiguous legacy NetID. Its answers
  *    seed the member_profiles row, and its provisioning event sets
  *    ad_provisioning_status (Slice 6: provisioning normally completes BEFORE
  *    first login — the AD account is the login precondition).
@@ -37,6 +37,7 @@ export async function bootstrapUser(u: {
   id: string;
   email: string;
   netid: string | null;
+  username?: string | null;
   displayName: string | null;
 }) {
   await db.transaction(async (tx) => {
@@ -65,15 +66,27 @@ export async function bootstrapUser(u: {
     let adProvisioningStatus: "pending" | "provisioned" | "failed" = "pending";
     let provisionedAt: Date | null = null;
 
-    if (u.netid) {
-      const [submission] = await tx
+    if (u.username || u.netid) {
+      const submissions = await tx
         .select()
         .from(signupSubmissions)
-        .where(eq(signupSubmissions.netid, u.netid))
+        .where(
+          and(
+            eq(signupSubmissions.status, "approved"),
+            u.username
+              ? eq(signupSubmissions.username, u.username)
+              : eq(signupSubmissions.netid, u.netid!),
+          ),
+        )
         .orderBy(desc(signupSubmissions.createdAt))
-        .limit(1);
-
-      if (submission?.status === "approved") {
+        .limit(2);
+      // Never choose another account's signup from an ambiguous shared NetID.
+      const submission = u.username
+        ? submissions[0]
+        : submissions.length === 1
+          ? submissions[0]
+          : undefined;
+      if (submission) {
         answers = submission.answers as Record<string, unknown>;
         answersSchemaVersionId = submission.schemaVersionId;
 
@@ -111,6 +124,7 @@ export async function bootstrapUser(u: {
           .update(user)
           .set({
             uin: submission.uin,
+            netid: submission.netid,
             username: submission.username,
             firstName: submission.firstName,
             lastName: submission.lastName,

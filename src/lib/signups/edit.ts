@@ -1,5 +1,5 @@
 import type { RequestEventCommon } from "@builder.io/qwik-city";
-import { and, eq, ne, or } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db";
 import {
@@ -83,7 +83,6 @@ export async function saveSignupEdits(
     const errors: Record<string, string> = {};
     const pending = await tx
       .select({
-        netid: signupSubmissions.netid,
         username: signupSubmissions.username,
       })
       .from(signupSubmissions)
@@ -91,23 +90,16 @@ export async function saveSignupEdits(
         and(
           ne(signupSubmissions.id, current.id),
           eq(signupSubmissions.status, "pending"),
-          or(
-            eq(signupSubmissions.netid, base.netid),
-            eq(signupSubmissions.username, base.username),
-          ),
+          eq(signupSubmissions.username, base.username),
         ),
       );
-    if (pending.some((row) => row.netid === base.netid))
-      errors.netid = "A signup with this NetID is already pending review.";
     if (pending.some((row) => row.username === base.username))
       errors.username =
         "A signup with this username is already pending review.";
     const accounts = await tx
-      .select({ netid: user.netid, username: user.username })
+      .select({ username: user.username })
       .from(user)
-      .where(or(eq(user.netid, base.netid), eq(user.username, base.username)));
-    if (accounts.some((row) => row.netid === base.netid))
-      errors.netid = "This NetID is already in use.";
+      .where(eq(user.username, base.username));
     if (accounts.some((row) => row.username === base.username))
       errors.username = "This username is already in use.";
     if (Object.keys(errors).length) return { ok: false, errors };

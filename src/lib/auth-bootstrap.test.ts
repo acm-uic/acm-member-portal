@@ -151,4 +151,137 @@ describe("bootstrapUser Discord copy", () => {
       .where(eq(account.userId, "u-ada"));
     expect(accounts.filter((a) => a.providerId === "discord")).toHaveLength(0);
   });
+  it("matches each shared-NetID account by username and copies its own approved signup", async () => {
+    const { db } = await import("~/lib/db");
+    const {
+      formSchemas,
+      signupSubmissions,
+      user,
+      memberProfiles,
+      provisioningEvents,
+    } = await import("~/lib/db/schema");
+    const { bootstrapUser } = await import("./auth-bootstrap");
+    const { eq } = await import("drizzle-orm");
+    const [schema] = await db.select().from(formSchemas).limit(1);
+    for (const [index, username] of [
+      "ada.primary",
+      "ada.secondary",
+    ].entries()) {
+      const [submission] = await db
+        .insert(signupSubmissions)
+        .values({
+          schemaVersionId: schema!.id,
+          firstName: `Account ${index}`,
+          lastName: "Lovelace",
+          netid: "alove",
+          username,
+          email: `${username}@example.com`,
+          answers: { major: `Major ${index}` },
+          status: "approved",
+          createdAt: new Date(2026, 0, index + 1),
+        })
+        .returning();
+      await db.insert(provisioningEvents).values({
+        submissionId: submission!.id,
+        payload: {},
+        status: "provisioned",
+      });
+      await db.insert(user).values({
+        id: username,
+        name: "Ada",
+        email: `${username}@acmuic.org`,
+        netid: username,
+        username,
+      });
+    }
+    // A more recent application must not replace an already-approved account's details.
+    await db.insert(signupSubmissions).values({
+      schemaVersionId: schema!.id,
+      firstName: "Pending",
+      lastName: "Account",
+      netid: "alove",
+      username: "ada.primary",
+      email: "pending@example.com",
+      answers: { major: "Pending" },
+      status: "pending",
+    });
+    for (const [index, username] of [
+      "ada.primary",
+      "ada.secondary",
+    ].entries()) {
+      await bootstrapUser({
+        id: username,
+        email: `${username}@acmuic.org`,
+        netid: username,
+        username,
+        displayName: "Ada",
+      });
+      const [account] = await db
+        .select()
+        .from(user)
+        .where(eq(user.id, username));
+      const [profile] = await db
+        .select()
+        .from(memberProfiles)
+        .where(eq(memberProfiles.userId, username));
+      expect(account).toMatchObject({
+        netid: "alove",
+        username,
+        firstName: `Account ${index}`,
+      });
+      expect(profile).toMatchObject({
+        answers: { major: `Major ${index}` },
+        adProvisioningStatus: "provisioned",
+      });
+    }
+  });
+
+  it.each([undefined, "unmatched-account"])(
+    "does not copy another account's details for a shared NetID without a matching username: %s",
+    async (username) => {
+      const { db } = await import("~/lib/db");
+      const { formSchemas, signupSubmissions, user, memberProfiles } =
+        await import("~/lib/db/schema");
+      const { bootstrapUser } = await import("./auth-bootstrap");
+      const { eq } = await import("drizzle-orm");
+      const [schema] = await db.select().from(formSchemas).limit(1);
+      for (const other of ["ada.primary", "ada.secondary"]) {
+        await db.insert(signupSubmissions).values({
+          schemaVersionId: schema!.id,
+          firstName: other,
+          lastName: "Lovelace",
+          netid: "alove",
+          username: other,
+          email: `${other}@example.com`,
+          answers: { private: other },
+          status: "approved",
+        });
+      }
+      await db.insert(user).values({
+        id: "unmatched",
+        name: "Unknown",
+        email: "unknown@example.com",
+        netid: "alove",
+        username,
+      });
+      await bootstrapUser({
+        id: "unmatched",
+        email: "unknown@example.com",
+        netid: "alove",
+        username,
+        displayName: "Unknown",
+      });
+      const [profile] = await db
+        .select()
+        .from(memberProfiles)
+        .where(eq(memberProfiles.userId, "unmatched"));
+      const [account] = await db
+        .select()
+        .from(user)
+        .where(eq(user.id, "unmatched"));
+      expect(profile!.answers).toEqual({});
+      expect(account!.firstName).toBeNull();
+      expect(account!.username).toBe(username ?? null);
+    },
+  );
 });

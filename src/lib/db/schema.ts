@@ -33,7 +33,7 @@ export const user = pgTable(
       .notNull()
       .defaultNow(),
     /* additionalFields — see src/lib/auth.ts user.additionalFields */
-    netid: text("netid").unique(),
+    netid: text("netid"),
     username: text("username").unique(),
     uin: text("uin"),
     firstName: text("first_name"),
@@ -44,7 +44,10 @@ export const user = pgTable(
     discordId: text("discord_id"),
     discordUsername: text("discord_username"),
   },
-  (t) => [uniqueIndex("user_discord_id_key").on(t.discordId)],
+  (t) => [
+    uniqueIndex("user_discord_id_key").on(t.discordId),
+    index("user_netid_idx").on(t.netid),
+  ],
 );
 
 export const session = pgTable("session", {
@@ -198,9 +201,7 @@ export const signupSubmissions = pgTable(
   },
   (t) => [
     index("signup_submissions_status_idx").on(t.status),
-    uniqueIndex("signup_submissions_pending_netid_key")
-      .on(t.netid)
-      .where(sql`${t.status} = 'pending'`),
+    index("signup_submissions_netid_idx").on(t.netid),
     uniqueIndex("signup_submissions_pending_username_key")
       .on(t.username)
       .where(sql`${t.status} = 'pending'`),

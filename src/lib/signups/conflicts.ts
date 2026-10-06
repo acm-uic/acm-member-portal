@@ -11,9 +11,6 @@ export function pendingSignupConflictErrors(
       cause?: unknown;
     };
     if (details.code === "23505") {
-      if (details.constraint === "signup_submissions_pending_netid_key") {
-        return { netid: "A signup with this NetID is already pending review." };
-      }
       if (details.constraint === "signup_submissions_pending_username_key") {
         return {
           username: "A signup with this username is already pending review.",

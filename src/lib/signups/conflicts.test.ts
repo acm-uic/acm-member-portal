@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { pendingSignupConflictErrors } from "./conflicts";
 
 const constraints = [
-  ["signup_submissions_pending_netid_key", "netid"],
   ["signup_submissions_pending_username_key", "username"],
 ] as const;
 
@@ -28,6 +27,7 @@ describe("pending signup conflict errors", () => {
     new Error("Database unavailable"),
     { code: "23505", constraint: "signup_submissions_pending_discord_id_key" },
     { code: "23505", constraint: "user_username_unique" },
+    { code: "23505", constraint: "signup_submissions_pending_netid_key" },
     { code: "23503", constraint: "signup_submissions_pending_netid_key" },
   ])("does not translate an unrelated failure: %j", (error) => {
     expect(pendingSignupConflictErrors(error)).toBeNull();

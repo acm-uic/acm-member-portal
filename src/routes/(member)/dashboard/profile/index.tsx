@@ -218,18 +218,6 @@ export const useSaveProfile = routeAction$(async (data, { sharedMap }) => {
     };
   }
 
-  const [netidTaken] = await db
-    .select({ id: user.id })
-    .from(user)
-    .where(eq(user.netid, base.netid))
-    .limit(1);
-  if (netidTaken && netidTaken.id !== session.user.id) {
-    return {
-      ok: false as const,
-      errors: { netid: "This NetID is already in use." },
-    };
-  }
-
   const [usernameTaken] = await db
     .select({ id: user.id })
     .from(user)

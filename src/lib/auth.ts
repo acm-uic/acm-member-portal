@@ -136,6 +136,8 @@ export const auth = betterAuth({
             id: created.id,
             email: created.email,
             netid,
+            username:
+              (created as { username?: string | null }).username ?? null,
             displayName:
               (created as { displayName?: string | null }).displayName ??
               created.name,

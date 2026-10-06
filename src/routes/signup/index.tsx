@@ -87,24 +87,6 @@ export const useSubmitSignup = routeAction$(async (data, event) => {
       )
     : null;
 
-  const [pendingNetid] = await db
-    .select({ id: signupSubmissions.id })
-    .from(signupSubmissions)
-    .where(
-      and(
-        eq(signupSubmissions.netid, base.netid),
-        eq(signupSubmissions.status, "pending"),
-      ),
-    )
-    .limit(1);
-  if (pendingNetid) {
-    return {
-      ok: false as const,
-      errors: { netid: "A signup with this NetID is already pending review." },
-      values: postedValues(data),
-    };
-  }
-
   const [pendingUsername] = await db
     .select({ id: signupSubmissions.id })
     .from(signupSubmissions)

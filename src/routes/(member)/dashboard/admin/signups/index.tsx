@@ -18,6 +18,7 @@ import { signupEditFields, signupEditValues } from "~/lib/forms/signup-edit";
 import { postedValues } from "~/lib/forms/zod-compiler";
 import { saveSignupEdits, type SignupEditResult } from "~/lib/signups/edit";
 import { formatSignupDisplayName } from "~/lib/forms/fields";
+import { duplicateSignupNetid } from "~/lib/signups/duplicates";
 import { submissionAnswers } from "~/lib/forms/submission-answers";
 import type { FormSchemaDefinition } from "~/lib/types";
 
@@ -36,6 +37,7 @@ export const useSignupQueue = routeLoader$(async (event) => {
       lastName: signupSubmissions.lastName,
       preferredName: signupSubmissions.preferredName,
       netid: signupSubmissions.netid,
+      duplicateNetid: duplicateSignupNetid,
       username: signupSubmissions.username,
       email: signupSubmissions.email,
       discordId: signupSubmissions.discordId,
@@ -227,6 +229,11 @@ export default component$(() => {
                     </td>
                     <td class="py-sm border-t border-border font-mono text-text3">
                       {s.netid}
+                      {s.duplicateNetid && (
+                        <span class="block text-warning text-caption font-sans mt-2xs">
+                          Duplicate NetID
+                        </span>
+                      )}
                     </td>
                     <td class="py-sm pr-md border-t border-border font-mono text-text3 break-all">
                       {s.username}
@@ -326,6 +333,13 @@ export default component$(() => {
                             Submitted {new Date(s.createdAt).toLocaleString()}
                           </p>
                         </header>
+                        {s.duplicateNetid && (
+                          <p role="note" class="text-warning text-body-sm m-0">
+                            Duplicate NetID: another pending signup, approved
+                            signup, or member account uses this NetID. You can
+                            still approve this signup with its unique username.
+                          </p>
+                        )}
                         {s.canEdit && editingId.value !== s.id && (
                           <div class="flex items-center gap-md">
                             <button
