@@ -42,6 +42,18 @@ describe("safe provisioning errors", () => {
         "private&api-token",
       ]),
     ).not.toContain("private&api-token");
+    expect(
+      sanitizeProvisioningError(
+        '{"oneTimePassword":"prefix\\u0022credential-tail"}',
+        ['prefix"credential-tail'],
+      ),
+    ).toBe('{"oneTimePassword":"[redacted]"}');
+    expect(
+      sanitizeProvisioningError(
+        '{"error":"Request exposed quote\\u0022and\\\\backslash"}',
+        ['quote"and\\backslash'],
+      ),
+    ).toBe('{"error":"Request exposed [redacted]"}');
     expect(sanitizeProvisioningError("AD failed\0\\u0000")).toBe("AD failed");
   });
 });

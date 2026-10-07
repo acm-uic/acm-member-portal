@@ -1,14 +1,29 @@
+function escapeRegex(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function jsonSecretPattern(secret: string) {
+  return Array.from({ length: secret.length }, (_, index) => {
+    const codeUnit = secret.charCodeAt(index);
+    const encoded = JSON.stringify(secret[index]).slice(1, -1);
+    const hex = codeUnit
+      .toString(16)
+      .padStart(4, "0")
+      .replace(/[a-f]/g, (character) =>
+        `[${character}${character.toUpperCase()}]`,
+      );
+    const alternatives = [escapeRegex(encoded), `\\\\u${hex}`];
+    if (secret[index] === "/") alternatives.push("\\\\/");
+    return `(?:${alternatives.join("|")})`;
+  }).join("");
+}
+
 /** Keep credentials out of persisted diagnostics and pod logs. */
 export function sanitizeProvisioningError(
   error: string,
   secrets: Array<string | undefined> = [],
 ): string {
-  // Decode JSON Unicode escapes before matching known secrets. Avoid escaped
-  // backslashes, which represent a literal `\uNNNN` string rather than a code unit.
-  let result = error.replace(
-    /(?<!\\)\\u([\da-f]{4})/gi,
-    (_, codeUnit: string) => String.fromCharCode(Number.parseInt(codeUnit, 16)),
-  );
+  let result = error;
   for (const secret of [
     ...secrets,
     process.env.WINDOWS_API_TOKEN,
@@ -18,9 +33,8 @@ export function sanitizeProvisioningError(
     process.env.DATABASE_URL,
   ]) {
     if (secret) {
-      const jsonEscapedSecret = JSON.stringify(secret).slice(1, -1);
       result = result
-        .replaceAll(jsonEscapedSecret, "[redacted]")
+        .replace(new RegExp(jsonSecretPattern(secret), "g"), "[redacted]")
         .replaceAll(secret, "[redacted]");
     }
   }
