@@ -76,7 +76,8 @@ app.UseRateLimiter();
 
 app.MapGet("/healthz", () => Results.Ok(new { status = "ok" }));
 
-app.MapPost("/users", async Task<IResult> (CreateUserRequest req, AdProvisioningService ad) =>
+app.MapPost("/users", async Task<IResult> (
+    CreateUserRequest req, AdProvisioningService ad, CancellationToken cancellationToken) =>
 {
     var accountName = req.AccountName;
     if (string.IsNullOrWhiteSpace(accountName) || string.IsNullOrWhiteSpace(req.FirstName)
@@ -88,7 +89,7 @@ app.MapPost("/users", async Task<IResult> (CreateUserRequest req, AdProvisioning
 
     try
     {
-        var result = await ad.CreateUserAsync(req);
+        var result = await ad.CreateUserAsync(req, cancellationToken);
         return Results.Ok(result);
     }
     catch (Exception ex)
@@ -143,7 +144,7 @@ app.MapPost("/users/{sam}/password", async Task<IResult> (string sam, ChangePass
         return Results.BadRequest(new { error = "Choose a new password that differs from your current password." });
     try
     {
-        var changed = await ad.ChangePasswordAsync(sam, req);
+        var changed = await ad.ChangePasswordAsync(sam, req, context.RequestAborted);
         return changed
             ? Results.Ok(new { ok = true })
             : Results.NotFound(new { error = "No Active Directory account was found for this username." });

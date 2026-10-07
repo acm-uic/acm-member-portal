@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { PGlite } from "@electric-sql/pglite";
 import { applySqlMigrations } from "./migrate";
 
@@ -111,6 +111,134 @@ describe("applySqlMigrations (PGlite)", () => {
 		await client.close();
 	});
 
+	it("defaults existing provisioning work to email when adding manual delivery", async () => {
+		const client = new PGlite();
+		const query = pgliteQuery(client);
+		try {
+			await applySqlMigrations(query, { useAdvisoryLock: false });
+			await query(
+				"ALTER TABLE provisioning_events DROP COLUMN credential_delivery_mode, DROP COLUMN credential_reveal_token",
+			);
+			await query('DELETE FROM "_migrations" WHERE name = $1', [
+				"0012_manual_credential_delivery.sql",
+			]);
+			const { rows: submissions } =
+				await query(`INSERT INTO signup_submissions (schema_version_id, first_name, last_name, netid, username, email, answers, status)
+        SELECT id, 'Alex', 'Smith', 'asmith', 'asmith', 'alex@example.com', '{}', 'approved' FROM form_schemas WHERE form_key = 'signup' LIMIT 1 RETURNING id`);
+			await query(
+				"INSERT INTO provisioning_events (submission_id, payload, status, credential_delivery_status) VALUES ($1, '{}', 'failed', 'pending')",
+				[submissions[0].id],
+			);
+			await applySqlMigrations(query, { useAdvisoryLock: false });
+			const { rows } = await query(
+				"SELECT credential_delivery_mode, credential_reveal_token, credential_delivery_status, status FROM provisioning_events",
+			);
+			expect(rows).toEqual([
+				{
+					credential_delivery_mode: "email",
+					credential_reveal_token: null,
+					credential_delivery_status: "pending",
+					status: "failed",
+				},
+			]);
+		} finally {
+			await client.close();
+		}
+	});
+
+	it("preserves queued events when adding credential delivery progress", async () => {
+		const client = new PGlite();
+		const query = pgliteQuery(client);
+		try {
+			await applySqlMigrations(query, { useAdvisoryLock: false });
+			// Reconstruct the outbox before the delivery-state migration.
+			await query(
+				"ALTER TABLE provisioning_events DROP COLUMN credential_delivery_status",
+			);
+			await query('DELETE FROM "_migrations" WHERE name = $1', [
+				"0011_credential_delivery_status.sql",
+			]);
+			const { rows: submissions } = await query(`
+				INSERT INTO signup_submissions
+				  (schema_version_id, first_name, last_name, netid, username, email, answers, status)
+				SELECT id, 'Alex', 'Morgan', 'amorga42', 'amorga42', 'alex@example.com', '{}', 'approved'
+				FROM form_schemas WHERE form_key = 'signup' AND status = 'published'
+				LIMIT 1 RETURNING id`);
+			await query(
+				`INSERT INTO provisioning_events
+				(submission_id, payload, status, attempts, last_error)
+				VALUES ($1, '{"username":"amorga42"}', 'failed', 3, 'SMTP unavailable')`,
+				[submissions[0].id],
+			);
+
+			await applySqlMigrations(query, { useAdvisoryLock: false });
+			const { rows } =
+				await query(`SELECT status, attempts, last_error, payload,
+				credential_delivery_status FROM provisioning_events`);
+			expect(rows).toEqual([
+				{
+					status: "failed",
+					attempts: 3,
+					last_error: "SMTP unavailable",
+					payload: { username: "amorga42" },
+					credential_delivery_status: "pending",
+				},
+			]);
+			await query(
+				"UPDATE provisioning_events SET credential_delivery_status = 'delivered'",
+			);
+			await applySqlMigrations(query, { useAdvisoryLock: false });
+			const { rows: reapplied } = await query(
+				"SELECT credential_delivery_status FROM provisioning_events",
+			);
+			expect(reapplied).toEqual([{ credential_delivery_status: "delivered" }]);
+		} finally {
+			await client.close();
+		}
+	});
+
+	it("preserves provisioning progress while adding claim tokens and the latest-event index", async () => {
+		const client = new PGlite();
+		const query = pgliteQuery(client);
+		try {
+			await applySqlMigrations(query, { useAdvisoryLock: false });
+			await query("ALTER TABLE provisioning_events DROP COLUMN claim_token");
+			await query("DROP INDEX provisioning_events_submission_latest_idx");
+			await query('DELETE FROM "_migrations" WHERE name = $1', [
+				"0013_provisioning_claims.sql",
+			]);
+			const { rows: submissions } = await query(`INSERT INTO signup_submissions
+        (schema_version_id, first_name, last_name, netid, username, email, answers, status)
+        SELECT id, 'Alex', 'Smith', 'asmith', 'asmith', 'alex@example.com', '{}', 'approved'
+        FROM form_schemas WHERE form_key = 'signup' LIMIT 1 RETURNING id`);
+			await query(
+				"INSERT INTO provisioning_events (submission_id, payload, status, credential_delivery_status) VALUES ($1, '{}', 'failed', 'delivered')",
+				[submissions[0].id],
+			);
+			await applySqlMigrations(query, { useAdvisoryLock: false });
+			await applySqlMigrations(query, { useAdvisoryLock: false });
+			const { rows } = await query(
+				"SELECT status, credential_delivery_status, claim_token FROM provisioning_events",
+			);
+			expect(rows).toEqual([
+				{
+					status: "failed",
+					credential_delivery_status: "delivered",
+					claim_token: null,
+				},
+			]);
+			const { rows: indexes } = await query(
+				"SELECT indexdef FROM pg_indexes WHERE indexname = 'provisioning_events_submission_latest_idx'",
+			);
+			expect(indexes).toHaveLength(1);
+			expect(indexes[0].indexdef).toContain(
+				"(submission_id, created_at DESC, id DESC)",
+			);
+		} finally {
+			await client.close();
+		}
+	});
+
 	it("splits legacy signup display_name into first/last/preferred", async () => {
 		const client = new PGlite();
 		const query = pgliteQuery(client);
@@ -148,6 +276,16 @@ describe("applySqlMigrations (PGlite)", () => {
 		// This legacy fixture models only signup data, without member accounts.
 		await query('INSERT INTO "_migrations" ("name") VALUES ($1)', [
 			"0010_shared_username_claims.sql",
+		]);
+		// This fixture also omits the provisioning outbox.
+		await query('INSERT INTO "_migrations" ("name") VALUES ($1)', [
+			"0011_credential_delivery_status.sql",
+		]);
+		await query('INSERT INTO "_migrations" ("name") VALUES ($1)', [
+			"0012_manual_credential_delivery.sql",
+		]);
+		await query('INSERT INTO "_migrations" ("name") VALUES ($1)', [
+			"0013_provisioning_claims.sql",
 		]);
 
 		await applySqlMigrations(query, { useAdvisoryLock: false });
@@ -258,6 +396,9 @@ describe("applySqlMigrations (PGlite)", () => {
 			"0008_shared_netids.sql",
 			"0009_signup_username_reservations.sql",
 			"0010_shared_username_claims.sql",
+			"0011_credential_delivery_status.sql",
+			"0012_manual_credential_delivery.sql",
+			"0013_provisioning_claims.sql",
 		]) {
 			await query('INSERT INTO "_migrations" ("name") VALUES ($1)', [name]);
 		}
@@ -280,10 +421,31 @@ describe("mail stub", () => {
 	const dirs: string[] = [];
 
 	afterEach(() => {
+		vi.unstubAllEnvs();
+		vi.restoreAllMocks();
 		for (const d of dirs) rmSync(d, { recursive: true, force: true });
 		dirs.length = 0;
 		delete process.env.SMTP_HOST;
 		delete process.env.MAIL_DIR;
+	});
+
+	it("rejects missing production SMTP without writing or logging the password", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "portal-mail-"));
+		dirs.push(dir);
+		vi.stubEnv("NODE_ENV", "production");
+		vi.stubEnv("MAIL_DIR", dir);
+		vi.stubEnv("SMTP_HOST", "");
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		const { sendCredentialEmail } = await import("../mail/templates");
+		await expect(
+			sendCredentialEmail({
+				to: "test@example.com",
+				username: "test",
+				oneTimePassword: "secret-otp",
+			}),
+		).rejects.toThrow("SMTP is not configured");
+		expect(readdirSync(dir)).toEqual([]);
+		expect(log).not.toHaveBeenCalled();
 	});
 
 	it("writes messages to MAIL_DIR when SMTP_HOST is unset", async () => {

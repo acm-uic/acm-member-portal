@@ -44,9 +44,9 @@ export const StaffOverview = component$<{
 			/>
 			{props.metrics.pendingSignups !== null && (
 				<MetricCard
-					label="Pending signups"
+					label="Signups in queue"
 					value={String(props.metrics.pendingSignups)}
-					note="Awaiting review"
+					note="Awaiting review or account setup"
 					tone={props.metrics.pendingSignups > 0 ? "warning" : "success"}
 				/>
 			)}
@@ -100,9 +100,9 @@ export const StaffOverview = component$<{
 		</section>
 
 		{props.canReviewSignups && (
-			<Panel title="Pending signups" meta="Review queue">
+			<Panel title="Signup queue" meta="Review and account setup">
 				{props.pendingSignups.length === 0 ? (
-					<p class="text-text3 text-body-sm m-0">No pending signups.</p>
+					<p class="text-text3 text-body-sm m-0">No signups awaiting review or account setup.</p>
 				) : (
 					<>
 						<ActivityTable

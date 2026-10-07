@@ -208,6 +208,31 @@ Check out the [contributing guide](.github/CONTRIBUTING.md) and the [Code of Con
 - [ ] A logged-in officer can view /admin/signups (proves the Better Auth
   tenant lock, the `admin.access` permission gate, and the k8s Secret wiring)
 - [ ] Approving a signup writes an `audit_events` row and a `provisioning_events`
-  row in `pending`; the worker marks it `provisioned` and emails the member
+  row in `pending`; email delivery lets the worker mark it `provisioned` and
+  email the member
+- [ ] Approved signups stay in the signup queue until provisioning succeeds.
+  The queue shows pending/processing status and the latest error after the first
+  failure, including when automatic retries stop. Authorized officers can retry
+  failed account setup. The page refreshes every five seconds while approved
+  signups remain, without interrupting edits or actions. Successfully provisioned
+  signups leave both the queue and the staff dashboard queue count.
+- [ ] Signup approval defaults to sending credential email. Officers can instead
+  choose **Show temporary password**, copy the credentials from the applicant's
+  panel, and confirm they have copied them before the signup leaves the queue.
+  No email is sent in this mode. Closing the panel or reloading before confirmation
+  keeps the signup queued; showing credentials again issues a fresh temporary
+  password. Passwords are not stored in the outbox, audit log, or page loader.
+  Apply `0012_manual_credential_delivery.sql` and deploy the updated worker before
+  the web app so old workers cannot email manually approved signups.
+- [ ] A failed credential email keeps the signup visible. Retrying the same
+  event can issue a fresh temporary password and retry delivery without storing
+  the password. Recorded delivery survives worker restarts and prevents another
+  password reset or email. Apply `0011_credential_delivery_status.sql` through
+  the normal migration runner and deploy the updated Windows API before the worker.
+- [ ] Stop existing worker replicas before applying `0013_provisioning_claims.sql`
+  and restarting them with the updated worker. Each claim has a token, and directory
+  and email operations lock the event against reclamation. Stale workers cannot
+  change delivery receipts or complete a newer claim. Production mail requires
+  `SMTP_HOST`; missing configuration fails delivery without writing a mail stub.
 - [ ] Running `kubectl create job --from=cronjob/portal-alumni-digest digest-smoke -n acm-portal`
   smoke-tests the digest with a no-op exit when there are no candidates

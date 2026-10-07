@@ -1,100 +1,100 @@
-import { component$, Fragment, useSignal } from "@builder.io/qwik";
-import { routeAction$, routeLoader$ } from "@builder.io/qwik-city";
-import { and, desc, eq } from "drizzle-orm";
-import { db } from "~/lib/db";
 import {
-  auditEvents,
-  formSchemas,
-  provisioningEvents,
-  signupSubmissions,
-} from "~/lib/db/schema";
+  $,
+  noSerialize,
+  type NoSerialize,
+  component$,
+  Fragment,
+  useSignal,
+  useVisibleTask$,
+} from "@builder.io/qwik";
+import {
+  routeAction$,
+  routeLoader$,
+  useNavigate,
+  useLocation,
+} from "@builder.io/qwik-city";
+import { and, eq } from "drizzle-orm";
+import { z } from "zod";
+import { db } from "~/lib/db";
+import { auditEvents, signupSubmissions } from "~/lib/db/schema";
 import { getPermissions, requirePermission } from "~/lib/rbac/guards";
 import {
   enqueueProvisioning,
-  retryDeadLetter,
+  retryProvisioning,
 } from "~/lib/provisioning/outbox";
 import { DynamicField } from "~/components/forms/dynamic-field";
 import { signupEditFields, signupEditValues } from "~/lib/forms/signup-edit";
 import { postedValues } from "~/lib/forms/zod-compiler";
 import { saveSignupEdits, type SignupEditResult } from "~/lib/signups/edit";
 import { formatSignupDisplayName } from "~/lib/forms/fields";
-import { duplicateSignupNetid } from "~/lib/signups/duplicates";
+import { loadSignupQueue, provisioningErrorText } from "~/lib/signups/queue";
 import { submissionAnswers } from "~/lib/forms/submission-answers";
 import type { FormSchemaDefinition } from "~/lib/types";
+import { requestCredentials } from "~/lib/provisioning/credential-delivery-client";
 
+type ManualCredentials = {
+  id: string;
+  username: string;
+  oneTimePassword: string;
+  token: string;
+};
 const PAGE_SIZE = 50;
 
-/** Pending queue — UIN only for officers holding members.read.restricted. */
+/** Review and provisioning queue. UIN requires members.read.restricted. */
 export const useSignupQueue = routeLoader$(async (event) => {
   await requirePermission(event, "signups.review");
   const perms = await getPermissions(event);
   const includeRestricted = perms.has("members.read.restricted");
 
-  const rows = await db
-    .select({
-      id: signupSubmissions.id,
-      firstName: signupSubmissions.firstName,
-      lastName: signupSubmissions.lastName,
-      preferredName: signupSubmissions.preferredName,
-      netid: signupSubmissions.netid,
-      duplicateNetid: duplicateSignupNetid,
-      username: signupSubmissions.username,
-      email: signupSubmissions.email,
-      discordId: signupSubmissions.discordId,
-      discordUsername: signupSubmissions.discordUsername,
-      discordInGuild: signupSubmissions.discordInGuild,
-      answers: signupSubmissions.answers,
-      schemaDefinition: formSchemas.fields,
-      createdAt: signupSubmissions.createdAt,
-      ...(includeRestricted ? { uin: signupSubmissions.uin } : {}),
-    })
-    .from(signupSubmissions)
-    .leftJoin(
-      formSchemas,
-      eq(signupSubmissions.schemaVersionId, formSchemas.id),
-    )
-    .where(eq(signupSubmissions.status, "pending"))
-    .orderBy(desc(signupSubmissions.createdAt))
-    .limit(PAGE_SIZE);
+  const requestedPage = Number(event.url.searchParams.get("page") ?? 1);
+  const page =
+    Number.isSafeInteger(requestedPage) && requestedPage > 0
+      ? requestedPage
+      : 1;
+  const rows = await loadSignupQueue(
+    includeRestricted,
+    PAGE_SIZE + 1,
+    (page - 1) * PAGE_SIZE,
+  );
 
-  return rows.map(({ answers, schemaDefinition, ...r }) => ({
-    ...r,
-    displayName: formatSignupDisplayName(r),
-    uin: "uin" in r ? r.uin : null,
-    uinRestricted: !includeRestricted,
-    canEdit: perms.has("signups.approve"),
-    editFields: signupEditFields(
-      (schemaDefinition as FormSchemaDefinition | null) ?? { fields: [] },
-      includeRestricted,
-    ),
-    editValues: postedValues(
-      signupEditValues(
-        r,
-        answers as Record<string, unknown>,
-        includeRestricted,
-      ),
-    ),
-    answerDetails: submissionAnswers(
-      answers as Record<string, unknown>,
-      (schemaDefinition as FormSchemaDefinition | null)?.fields ?? [],
-    ),
-  }));
-});
-
-/** Dead-letter provisioning events (officer visibility + retry). */
-export const useDeadLetters = routeLoader$(async (event) => {
-  await requirePermission(event, "signups.review");
-  return db
-    .select({
-      id: provisioningEvents.id,
-      attempts: provisioningEvents.attempts,
-      lastError: provisioningEvents.lastError,
-      updatedAt: provisioningEvents.updatedAt,
-    })
-    .from(provisioningEvents)
-    .where(eq(provisioningEvents.status, "dead_lettered"))
-    .orderBy(desc(provisioningEvents.updatedAt))
-    .limit(PAGE_SIZE);
+  return {
+    page,
+    hasNext: rows.length > PAGE_SIZE,
+    rows: rows
+      .slice(0, PAGE_SIZE)
+      .map(({ answers, schemaDefinition, ...r }) => ({
+        ...r,
+        displayName: formatSignupDisplayName(r),
+        uin: "uin" in r ? r.uin : null,
+        uinRestricted: !includeRestricted,
+        canEdit: r.status === "pending" && perms.has("signups.approve"),
+        canRetry:
+          perms.has("provisioning.retry") &&
+          r.credentialDeliveryMode !== "admin" &&
+          (r.provisioningStatus === "failed" ||
+            r.provisioningStatus === "dead_lettered"),
+        canReveal:
+          perms.has("signups.approve") &&
+          r.status === "approved" &&
+          r.credentialDeliveryMode === "admin",
+        provisioningError: provisioningErrorText(r.provisioningError),
+        editFields: signupEditFields(
+          (schemaDefinition as FormSchemaDefinition | null) ?? { fields: [] },
+          includeRestricted,
+        ),
+        editValues: postedValues(
+          signupEditValues(
+            r,
+            answers as Record<string, unknown>,
+            includeRestricted,
+          ),
+        ),
+        answerDetails: submissionAnswers(
+          answers as Record<string, unknown>,
+          (schemaDefinition as FormSchemaDefinition | null)?.fields ?? [],
+        ),
+      })),
+  };
 });
 
 export const useEditSignup = routeAction$(saveSignupEdits);
@@ -102,6 +102,11 @@ export const useEditSignup = routeAction$(saveSignupEdits);
 export const useApproveSignup = routeAction$(async (data, event) => {
   const session = await requirePermission(event, "signups.approve");
   const id = String(data.id ?? "");
+  const mode = z
+    .enum(["email", "admin"])
+    .safeParse(data.deliveryMode ?? "email");
+  if (!mode.success)
+    return { ok: false as const, error: "Choose how to deliver credentials." };
   const eventId = crypto.randomUUID();
 
   const claimed = await db.transaction(async (tx) => {
@@ -121,20 +126,20 @@ export const useApproveSignup = routeAction$(async (data, event) => {
       .returning();
     if (!row) return null;
 
-    await enqueueProvisioning(tx, row, eventId);
+    await enqueueProvisioning(tx, row, eventId, mode.data);
     await tx.insert(auditEvents).values({
       actorId: session.user.id,
       action: "signup.approve",
       targetType: "signup_submission",
       targetId: id,
-      after: { netid: row.netid, eventId },
+      after: { netid: row.netid, eventId, deliveryMode: mode.data },
     });
     return row;
   });
 
   if (!claimed)
     return { ok: false as const, error: "Submission is not pending." };
-  return { ok: true as const };
+  return { ok: true as const, eventId, deliveryMode: mode.data };
 });
 
 export const useDenySignup = routeAction$(async (data, event) => {
@@ -177,13 +182,18 @@ export const useDenySignup = routeAction$(async (data, event) => {
 
 export const useRetryProvisioning = routeAction$(async (data, event) => {
   await requirePermission(event, "provisioning.retry");
-  await retryDeadLetter(String(data.id ?? ""));
+  const id = z.uuid().safeParse(data.id);
+  if (!id.success || !(await retryProvisioning(id.data)))
+    return {
+      ok: false as const,
+      error:
+        "This account setup is no longer available to retry. Refresh its status.",
+    };
   return { ok: true as const };
 });
 
 export default component$(() => {
   const queue = useSignupQueue();
-  const deadLetters = useDeadLetters();
   const approve = useApproveSignup();
   const deny = useDenySignup();
   const retry = useRetryProvisioning();
@@ -192,22 +202,127 @@ export default component$(() => {
   const editResult = useSignal<SignupEditResult | null>(null);
   const savedId = useSignal<string | null>(null);
   const expandedId = useSignal<string | null>(null);
+  const actionError = useSignal<string | null>(null);
+  const deliveryModes = useSignal<Record<string, "email" | "admin">>({});
+  const manualBusy = useSignal(false);
+  const manualCredentials = useSignal<NoSerialize<ManualCredentials>>();
+  const passwordCopied = useSignal(false);
+  const reveal = $(async (id: string) => {
+    manualBusy.value = true;
+    actionError.value = null;
+    manualCredentials.value = undefined;
+    passwordCopied.value = false;
+    try {
+      const result = await requestCredentials({ action: "reveal", id });
+      manualCredentials.value = noSerialize({
+        id,
+        username: result.username,
+        oneTimePassword: result.oneTimePassword,
+        token: result.token,
+      });
+    } catch (error) {
+      actionError.value =
+        error instanceof Error
+          ? error.message
+          : "Could not show credentials. Try again.";
+    } finally {
+      manualBusy.value = false;
+    }
+  });
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  useVisibleTask$(({ track, cleanup }) => {
+    const hasApproved = track(() =>
+      queue.value.rows.some((s) => s.status === "approved"),
+    );
+    if (!hasApproved) return;
+    let refreshing = false;
+    const timer = setInterval(async () => {
+      if (
+        document.hidden ||
+        manualBusy.value ||
+        manualCredentials.value ||
+        refreshing ||
+        manualBusy.value ||
+        !!manualCredentials.value ||
+        location.isNavigating ||
+        editingId.value ||
+        approve.isRunning ||
+        deny.isRunning ||
+        retry.isRunning ||
+        edit.isRunning
+      )
+        return;
+      refreshing = true;
+      try {
+        await navigate(undefined, { replaceState: true, scroll: false });
+      } catch {
+        actionError.value =
+          "Could not refresh account status. Try refreshing again.";
+      } finally {
+        refreshing = false;
+      }
+    }, 5_000);
+    cleanup(() => clearInterval(timer));
+  });
 
   return (
     <main class="p-xl grid gap-xl max-w-7xl min-w-0">
       <header>
         <h1 class="font-display text-heading m-0">Signup queue</h1>
         <p class="text-text2 text-body m-0">
-          {queue.value.length} pending review
+          {queue.value.rows.filter((s) => s.status === "pending").length}{" "}
+          awaiting review ·{" "}
+          {queue.value.rows.filter((s) => s.status === "approved").length}{" "}
+          awaiting account setup on this page
         </p>
+        <button
+          type="button"
+          class="mt-sm text-accent text-label cursor-pointer"
+          disabled={
+            manualBusy.value ||
+            !!manualCredentials.value ||
+            location.isNavigating ||
+            editingId.value !== null ||
+            edit.isRunning ||
+            approve.isRunning ||
+            deny.isRunning ||
+            retry.isRunning
+          }
+          onClick$={async () => {
+            if (
+              manualBusy.value ||
+              !!manualCredentials.value ||
+              location.isNavigating ||
+              editingId.value !== null
+            )
+              return;
+            actionError.value = null;
+            try {
+              await navigate(undefined, { replaceState: true, scroll: false });
+            } catch {
+              actionError.value =
+                "Could not refresh account status. Try again.";
+            }
+          }}
+        >
+          Refresh status
+        </button>
       </header>
 
-      {queue.value.length === 0 ? (
+      {actionError.value && (
+        <p role="alert" class="text-error text-body-sm m-0">
+          {actionError.value}
+        </p>
+      )}
+
+      {queue.value.rows.length === 0 ? (
         <p class="text-text3 text-body">
-          No pending signups. New submissions appear here.
+          No signups awaiting review or account setup on this page.
         </p>
       ) : (
-        <div class="overflow-x-auto">
+        <div class="@container min-w-0 max-w-full overflow-x-auto">
           <table class="w-full text-body-sm border-collapse">
             <thead>
               <tr class="text-left text-text3 text-caption">
@@ -217,11 +332,12 @@ export default component$(() => {
                 <th class="py-sm border-t border-border">Discord</th>
                 <th class="py-sm border-t border-border">UIN</th>
                 <th class="py-sm border-t border-border">Submitted</th>
+                <th class="py-sm border-t border-border">Status</th>
                 <th class="py-sm border-t border-border">Actions</th>
               </tr>
             </thead>
             <tbody>
-              {queue.value.map((s) => (
+              {queue.value.rows.map((s) => (
                 <Fragment key={s.id}>
                   <tr>
                     <td class="py-sm border-t border-border text-text1">
@@ -258,12 +374,55 @@ export default component$(() => {
                     <td class="py-sm border-t border-border text-text3">
                       {new Date(s.createdAt).toLocaleDateString()}
                     </td>
+                    <td class="py-sm pr-md border-t border-border min-w-60 max-w-md">
+                      <span
+                        class={
+                          s.provisioningStatus === "failed" ||
+                          s.provisioningStatus === "dead_lettered" ||
+                          (s.status === "approved" && !s.provisioningId)
+                            ? "text-error"
+                            : "text-text2"
+                        }
+                      >
+                        {s.status === "pending"
+                          ? "Awaiting review"
+                          : s.provisioningStatus === "processing"
+                            ? "Creating AD account"
+                            : s.provisioningStatus === "failed"
+                              ? "Account setup failed"
+                              : s.provisioningStatus === "dead_lettered"
+                                ? "Account setup stopped"
+                                : !s.provisioningId
+                                  ? "Account setup was not queued"
+                                  : s.credentialDeliveryMode === "admin"
+                                    ? "Awaiting manual credential delivery"
+                                    : "Waiting to create AD account"}
+                      </span>
+                      {s.credentialDeliveryMode !== "admin" &&
+                        s.provisioningStatus === "failed" &&
+                        s.nextAttemptAt && (
+                          <p class="text-text3 text-caption m-0 mt-2xs">
+                            Automatic retry at{" "}
+                            {new Date(s.nextAttemptAt).toLocaleString()}.
+                          </p>
+                        )}
+                      {s.provisioningStatus === "dead_lettered" && (
+                        <p class="text-text3 text-caption m-0 mt-2xs">
+                          Automatic retries have stopped.
+                        </p>
+                      )}
+                    </td>
                     <td class="py-sm border-t border-border">
                       <div class="flex gap-sm flex-wrap">
                         <button
                           type="button"
                           class="px-sm py-2xs rounded-control border border-border-visible text-text1 text-label cursor-pointer whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
-                          disabled={editingId.value !== null || edit.isRunning}
+                          disabled={
+                            manualBusy.value ||
+                            !!manualCredentials.value ||
+                            editingId.value !== null ||
+                            edit.isRunning
+                          }
                           aria-expanded={expandedId.value === s.id}
                           aria-controls={`signup-details-${s.id}`}
                           aria-label={`${expandedId.value === s.id ? "Hide details" : "View details"} for ${s.username}`}
@@ -276,47 +435,305 @@ export default component$(() => {
                             ? "Hide details"
                             : "View details"}
                         </button>
-                        <button
-                          type="button"
-                          class="px-sm py-2xs rounded-control bg-accent text-white text-label cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                          disabled={
-                            !s.canEdit ||
-                            editingId.value !== null ||
-                            edit.isRunning ||
-                            approve.isRunning ||
-                            deny.isRunning
-                          }
-                          onClick$={async () => {
-                            await approve.submit({ id: s.id });
-                          }}
-                        >
-                          Approve
-                        </button>
-                        <button
-                          type="button"
-                          class="px-sm py-2xs rounded-control border border-border-visible text-text1 text-label cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                          disabled={
-                            !s.canEdit ||
-                            editingId.value !== null ||
-                            edit.isRunning ||
-                            approve.isRunning ||
-                            deny.isRunning
-                          }
-                          onClick$={async () => {
-                            const reason = window.prompt(
-                              "Reason for denial (optional)",
-                            );
-                            if (reason === null) return;
-                            await deny.submit({ id: s.id, reason });
-                          }}
-                        >
-                          Deny
-                        </button>
+                        {s.status === "pending" && (
+                          <>
+                            <label class="grid gap-2xs text-caption text-text3">
+                              Credential delivery
+                              <select
+                                aria-label={`Credential delivery for ${s.username}`}
+                                class="bg-surface1 border border-border-visible rounded-control text-text1 px-sm py-2xs"
+                                value={deliveryModes.value[s.id] ?? "email"}
+                                disabled={
+                                  !s.canEdit ||
+                                  location.isNavigating ||
+                                  approve.isRunning ||
+                                  deny.isRunning ||
+                                  edit.isRunning ||
+                                  editingId.value !== null ||
+                                  manualBusy.value ||
+                                  !!manualCredentials.value
+                                }
+                                onChange$={(_, element) => {
+                                  deliveryModes.value = {
+                                    ...deliveryModes.value,
+                                    [s.id]:
+                                      element.value === "admin"
+                                        ? "admin"
+                                        : "email",
+                                  };
+                                }}
+                              >
+                                <option value="email">Send email</option>
+                                <option value="admin">
+                                  Show temporary password
+                                </option>
+                              </select>
+                            </label>
+                            <button
+                              type="button"
+                              class="px-sm py-2xs rounded-control bg-accent text-white text-label cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                              disabled={
+                                !s.canEdit ||
+                                manualBusy.value ||
+                                !!manualCredentials.value ||
+                                location.isNavigating ||
+                                editingId.value !== null ||
+                                edit.isRunning ||
+                                approve.isRunning ||
+                                deny.isRunning
+                              }
+                              onClick$={async () => {
+                                if (location.isNavigating) return;
+                                actionError.value = null;
+                                try {
+                                  manualBusy.value = true;
+                                  const result = await approve.submit({
+                                    id: s.id,
+                                    deliveryMode:
+                                      deliveryModes.value[s.id] ?? "email",
+                                  });
+                                  if (!result.value.ok)
+                                    actionError.value = result.value.error;
+                                  else if (
+                                    result.value.deliveryMode === "admin"
+                                  )
+                                    await reveal(result.value.eventId);
+                                } catch {
+                                  actionError.value =
+                                    "Approval could not be saved. Try again.";
+                                } finally {
+                                  manualBusy.value = false;
+                                }
+                              }}
+                            >
+                              Approve
+                            </button>
+                            <button
+                              type="button"
+                              class="px-sm py-2xs rounded-control border border-border-visible text-text1 text-label cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                              disabled={
+                                !s.canEdit ||
+                                manualBusy.value ||
+                                !!manualCredentials.value ||
+                                location.isNavigating ||
+                                editingId.value !== null ||
+                                edit.isRunning ||
+                                approve.isRunning ||
+                                deny.isRunning
+                              }
+                              onClick$={async () => {
+                                if (location.isNavigating) return;
+                                const reason = window.prompt(
+                                  "Reason for denial (optional)",
+                                );
+                                if (reason === null) return;
+                                await deny.submit({ id: s.id, reason });
+                              }}
+                            >
+                              Deny
+                            </button>
+                          </>
+                        )}
+                        {s.canReveal && s.provisioningId && (
+                          <button
+                            type="button"
+                            class="px-sm py-2xs rounded-control bg-accent text-white text-label cursor-pointer disabled:opacity-50"
+                            disabled={
+                              manualBusy.value ||
+                              !!manualCredentials.value ||
+                              location.isNavigating ||
+                              editingId.value !== null ||
+                              edit.isRunning ||
+                              approve.isRunning ||
+                              deny.isRunning ||
+                              retry.isRunning ||
+                              (s.provisioningStatus === "processing" &&
+                                Date.now() -
+                                  new Date(s.provisioningUpdatedAt!).getTime() <
+                                  300_000)
+                            }
+                            onClick$={async () => {
+                              await reveal(s.provisioningId!);
+                            }}
+                          >
+                            Show temporary password
+                          </button>
+                        )}
+                        {s.canRetry && s.provisioningId && (
+                          <button
+                            type="button"
+                            class="px-sm py-2xs rounded-control border border-border-visible text-text1 text-label cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                            disabled={
+                              retry.isRunning ||
+                              manualBusy.value ||
+                              !!manualCredentials.value ||
+                              location.isNavigating ||
+                              editingId.value !== null ||
+                              edit.isRunning ||
+                              approve.isRunning ||
+                              deny.isRunning
+                            }
+                            onClick$={async () => {
+                              if (location.isNavigating) return;
+                              actionError.value = null;
+                              try {
+                                const result = await retry.submit({
+                                  id: s.provisioningId!,
+                                });
+                                if (!result.value.ok)
+                                  actionError.value = result.value.error;
+                              } catch {
+                                actionError.value =
+                                  "Account setup could not be retried. Try again.";
+                              }
+                            }}
+                          >
+                            {retry.isRunning ? "Retrying..." : "Retry now"}
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
+                  {manualCredentials.value?.id === s.provisioningId && (
+                    <tr>
+                      <td colSpan={8} class="pb-md">
+                        <section
+                          aria-label={`Temporary credentials for ${s.displayName}, ${s.username}`}
+                          class="w-[100cqw] max-w-full min-w-0 bg-surface1 border border-border rounded-component p-md grid gap-sm [overflow-wrap:anywhere]"
+                        >
+                          <p class="text-label text-text1 m-0">
+                            Temporary credentials for {s.displayName}{" "}
+                            <span class="font-mono text-text3">
+                              ({s.username})
+                            </span>
+                          </p>
+                          <p class="text-body-sm text-text2 m-0">
+                            Copy these credentials to distribute to the
+                            applicant. They must change their password at first
+                            sign-in. No email will be sent.
+                          </p>
+                          <p class="text-body-sm text-text1 m-0">
+                            Username:{" "}
+                            <span class="font-mono">
+                              {manualCredentials.value.username}
+                            </span>
+                          </p>
+                          <label class="grid gap-2xs text-caption text-text3">
+                            Temporary password
+                            <input
+                              type="text"
+                              readOnly
+                              autoComplete="off"
+                              spellcheck={false}
+                              value={manualCredentials.value.oneTimePassword}
+                              class="min-w-0 w-full rounded-control border border-border-visible bg-surface2 p-sm font-mono text-text1"
+                            />
+                          </label>
+                          <div class="flex flex-wrap gap-sm">
+                            <button
+                              type="button"
+                              class="px-sm py-2xs rounded-control border border-border-visible text-text1 text-label cursor-pointer"
+                              disabled={manualBusy.value}
+                              onClick$={async () => {
+                                const credentials = manualCredentials.value;
+                                if (!credentials) return;
+                                try {
+                                  await navigator.clipboard.writeText(
+                                    `Username: ${credentials.username}\nTemporary password: ${credentials.oneTimePassword}`,
+                                  );
+                                  passwordCopied.value = true;
+                                } catch {
+                                  actionError.value =
+                                    "Could not copy automatically. Select and copy the password above.";
+                                }
+                              }}
+                            >
+                              {passwordCopied.value
+                                ? "Copied"
+                                : "Copy credentials"}
+                            </button>
+                            <button
+                              type="button"
+                              class="px-sm py-2xs rounded-control bg-accent text-white text-label cursor-pointer disabled:opacity-50"
+                              disabled={manualBusy.value}
+                              onClick$={async () => {
+                                const credentials = manualCredentials.value;
+                                if (!credentials || manualBusy.value) return;
+                                manualBusy.value = true;
+                                actionError.value = null;
+                                try {
+                                  await requestCredentials({
+                                    action: "confirm",
+                                    id: credentials.id,
+                                    token: credentials.token,
+                                  });
+                                  manualCredentials.value = undefined;
+                                  await navigate(undefined, {
+                                    replaceState: true,
+                                    scroll: false,
+                                  });
+                                } catch (error) {
+                                  actionError.value =
+                                    error instanceof Error
+                                      ? error.message
+                                      : "Could not finish approval. Try again.";
+                                } finally {
+                                  manualBusy.value = false;
+                                }
+                              }}
+                            >
+                              {manualBusy.value
+                                ? "Saving..."
+                                : "I've copied the password"}
+                            </button>
+                            <button
+                              type="button"
+                              class="px-sm py-2xs rounded-control border border-border-visible text-text1 text-label cursor-pointer"
+                              disabled={manualBusy.value}
+                              onClick$={() => {
+                                manualCredentials.value = undefined;
+                              }}
+                            >
+                              Hide password
+                            </button>
+                          </div>
+                          <p class="text-caption text-text3 m-0">
+                            This signup stays queued until you confirm you have
+                            copied the password. If you hide it or reload before
+                            confirming, showing it again generates a new
+                            temporary password.
+                          </p>
+                        </section>
+                      </td>
+                    </tr>
+                  )}
+                  {s.status === "approved" &&
+                    (s.provisioningError || !s.provisioningId) && (
+                      <tr>
+                        <td colSpan={8} class="pb-md">
+                          <section
+                            aria-label={`Account setup error for ${s.displayName}, ${s.username}`}
+                            class="w-[100cqw] max-w-full min-w-0 bg-surface1 border border-border rounded-component p-md grid gap-2xs [overflow-wrap:anywhere]"
+                          >
+                            <p class="text-label text-text1 m-0">
+                              Account setup for {s.displayName}{" "}
+                              <span class="font-mono text-text3">
+                                ({s.username})
+                              </span>
+                            </p>
+                            <p
+                              role="alert"
+                              class="text-error text-body-sm m-0 whitespace-pre-wrap"
+                            >
+                              {s.provisioningError ||
+                                "Approval was saved, but account creation was not queued. Contact an administrator."}
+                            </p>
+                          </section>
+                        </td>
+                      </tr>
+                    )}
                   <tr hidden={expandedId.value !== s.id}>
-                    <td colSpan={7} class="pb-md">
+                    <td colSpan={8} class="pb-md">
                       <section
                         id={`signup-details-${s.id}`}
                         aria-labelledby={`signup-details-title-${s.id}`}
@@ -345,12 +762,23 @@ export default component$(() => {
                             <button
                               type="button"
                               disabled={
+                                manualBusy.value ||
+                                !!manualCredentials.value ||
+                                location.isNavigating ||
+                                editingId.value !== null ||
                                 approve.isRunning ||
                                 deny.isRunning ||
                                 edit.isRunning
                               }
                               class="px-md py-sm rounded-control border border-border-visible text-text1 text-label cursor-pointer disabled:opacity-50"
                               onClick$={() => {
+                                if (
+                                  manualBusy.value ||
+                                  !!manualCredentials.value ||
+                                  location.isNavigating ||
+                                  editingId.value !== null
+                                )
+                                  return;
                                 editingId.value = s.id;
                                 editResult.value = null;
                                 savedId.value = null;
@@ -568,38 +996,73 @@ export default component$(() => {
           </table>
         </div>
       )}
-
-      {deadLetters.value.length > 0 && (
-        <section class="grid gap-md">
-          <h2 class="text-subheading m-0 text-warning">
-            Provisioning failures
-          </h2>
-          {deadLetters.value.map((e) => (
-            <div
-              key={e.id}
-              class="bg-surface1 border border-border rounded-component p-md flex items-center justify-between gap-md"
-            >
-              <div class="grid gap-2xs">
-                <span class="font-mono text-caption text-text3">{e.id}</span>
-                <span class="text-body-sm text-error">
-                  {e.lastError ?? "unknown error"}
-                </span>
-                <span class="text-caption text-text4">
-                  {e.attempts} attempts
-                </span>
-              </div>
-              <button
-                type="button"
-                class="px-sm py-2xs rounded-control border border-border-visible text-text1 text-label cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                onClick$={async () => {
-                  await retry.submit({ id: e.id });
-                }}
-              >
-                Retry now
-              </button>
-            </div>
-          ))}
-        </section>
+      {(queue.value.page > 1 || queue.value.hasNext) && (
+        <nav aria-label="Signup queue pages" class="flex items-center gap-md">
+          <button
+            type="button"
+            class="text-accent text-label cursor-pointer disabled:opacity-50"
+            disabled={
+              queue.value.page === 1 ||
+              manualBusy.value ||
+              !!manualCredentials.value ||
+              location.isNavigating ||
+              editingId.value !== null ||
+              approve.isRunning ||
+              deny.isRunning ||
+              retry.isRunning ||
+              edit.isRunning
+            }
+            onClick$={async () => {
+              if (
+                manualBusy.value ||
+                !!manualCredentials.value ||
+                location.isNavigating ||
+                editingId.value !== null
+              )
+                return;
+              try {
+                await navigate(`?page=${queue.value.page - 1}`);
+              } catch {
+                actionError.value =
+                  "Could not load the previous page. Try again.";
+              }
+            }}
+          >
+            Previous
+          </button>
+          <span class="text-text3 text-caption">Page {queue.value.page}</span>
+          <button
+            type="button"
+            class="text-accent text-label cursor-pointer disabled:opacity-50"
+            disabled={
+              !queue.value.hasNext ||
+              manualBusy.value ||
+              !!manualCredentials.value ||
+              location.isNavigating ||
+              editingId.value !== null ||
+              approve.isRunning ||
+              deny.isRunning ||
+              retry.isRunning ||
+              edit.isRunning
+            }
+            onClick$={async () => {
+              if (
+                manualBusy.value ||
+                !!manualCredentials.value ||
+                location.isNavigating ||
+                editingId.value !== null
+              )
+                return;
+              try {
+                await navigate(`?page=${queue.value.page + 1}`);
+              } catch {
+                actionError.value = "Could not load the next page. Try again.";
+              }
+            }}
+          >
+            Next
+          </button>
+        </nav>
       )}
     </main>
   );

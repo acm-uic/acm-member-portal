@@ -37,18 +37,68 @@ JSON is camelCase. Required create fields: `username` (or `netid`), `firstName`,
 ```
 
 `username` is the ACM account name. It becomes `sAMAccountName` and the local
-part of `UserPrincipalName`. If it is omitted, `netid` is used instead. `eventId`
-is correlation-only and is not written to AD.
+part of `UserPrincipalName`. If it is omitted, `netid` is used instead. The API
+records `ACM provisioning event: <eventId>` in the new account's `description`
+to identify which signup event owns its initial credentials.
 
-AD mapping on create: `Name`/`CN`←`"First Last"`, `GivenName`←firstName,
+AD mapping on create: `Name`/`CN`←username (or netid), `GivenName`←firstName,
 `Surname`←lastName, `DisplayName`←displayName (portal sends preferred name or
 `"First Last"`), `EmployeeID`←uin, `Department`←major, `Company`←college,
 `EmailAddress`←email.
 
-Response: `{ samAccountName, existed, oneTimePassword? }`. `oneTimePassword` is
-returned only when a new account was created. It is never logged or stored.
-Replay against an existing `sAMAccountName` returns `{ existed: true }` with no
-password.
+New accounts go in a month OU nested inside a year OU under `Provisioning:UsersOu`,
+for example `CN=amorga,OU=10,OU=2026,OU=ACMUsers,DC=acmuic,DC=org`.
+The API uses the actual
+account creation month in `Provisioning:TimeZone`, which defaults to
+`America/Chicago`. It creates missing year and month OUs and reuses existing ones,
+including when concurrent requests create the first accounts of the year or month.
+The base OU must already exist.
+
+Username-based CNs allow people with identical legal names in the same month.
+Their legal and display name attributes retain the mapping above. Existing
+accounts keep their current location and CN. Lookups, updates, password changes,
+and create replays search the entire base OU subtree, including older accounts
+directly under the base OU. A replay does not move an existing account into the
+current month's OU. Username changes update the login attributes and retain the
+original CN.
+
+Response: `{ samAccountName, existed, oneTimePassword? }`. A new account returns
+a temporary password, which is never logged or stored in production. Ordinary
+replays against an enabled existing account return `{ existed: true }` without
+a password. The worker passes `retryCredentialDelivery: true` until it has
+recorded successful credential delivery. With that flag, a replay may issue a
+fresh temporary password only when the account's description contains the same
+event marker and `pwdLastSet` is still zero. It preserves the requirement to
+change the password at first sign-in. Accounts owned by a different event,
+unmarked existing accounts, and accounts whose password has already been changed
+are never reset by credential retries.
+
+Create, credential-reissue, and password-change requests for one account are
+serialized within the Windows API process, including username spellings that
+differ only by case. A completed user password change is checked before a queued
+credential reissue, which then preserves the user's new password. This gate covers
+password changes through this API; external AD clients do not share it.
+Disconnected requests waiting to run are cancelled. A directory operation that
+has already started retains its gate until it finishes, so a timed-out request
+cannot overwrite credentials issued by a later retry.
+
+The portal persists delivery progress without the password. Email failures stay
+in the signup queue until delivery succeeds, and a saved delivery receipt lets a
+restarted worker complete the event without resetting the password or sending
+mail again. If an event awaiting delivery receives no temporary password, it
+remains failed and requires an administrator to verify delivery. Deploy this
+Windows API version before the worker to enable automatic credential reissue.
+The migration treats older interrupted or failed events as awaiting delivery.
+Their AD accounts may lack the event marker, so credential recovery can require
+administrator verification rather than an automatic reset.
+
+Disabled accounts or accounts with incomplete password setup return an error,
+so the signup remains in the queue. If password setup or enablement fails for an account
+created by the current request, the API deletes that new account and reports the
+original failure. If deletion also fails, both errors are returned and an
+administrator must repair or remove the incomplete account before retrying.
+Accounts found during an initial lookup or concurrent create are never deleted
+by a replay.
 
 `PATCH /users/{sam}` body (all fields optional): `{ username, firstName,
 lastName, preferredName, displayName, email, uin }`. Written to AD when set:
@@ -115,9 +165,15 @@ members OU it manages.
    - ADUC → the OU → Delegate Control → `ACMUIC\acmmemberportal`
    - canned task **Create, delete, and manage user accounts**
    That grants create/delete users, reset password, and write the attributes this
-   API sets (`givenName`, `sn`, `displayName`, `mail`, `employeeID`, `department`,
-   `company`, `sAMAccountName`, `userPrincipalName`, `userAccountControl`,
+   API sets (`givenName`, `sn`, `displayName`, `mail`, `description`,
+   `employeeID`, `department`, `company`, `sAMAccountName`, `userPrincipalName`, `userAccountControl`,
    `pwdLastSet`).
+   - Add a custom delegation on the base OU and descendant OUs for **Create
+     Organizational Unit objects**. The API needs this to create years under
+     the base OU and months under each year OU.
+   - Ensure the user-management delegation applies to descendant user objects
+     and permits creating users in descendant OUs. New year and month OUs must inherit
+     those permissions and any member Group Policy settings.
 3. Confirm the ACE:
 
    ```powershell
@@ -151,7 +207,8 @@ Environment variables override `appsettings.json`:
 
 - `Provisioning__Token` — shared bearer token (same value as the portal's `WINDOWS_API_TOKEN` k8s Secret)
 - `Provisioning__UpnSuffix` — e.g. `acmuic.org`
-- `Provisioning__UsersOu` — e.g. `OU=ACMUsers,DC=acmuic,DC=org`
+- `Provisioning__UsersOu` — existing base OU, e.g. `OU=ACMUsers,DC=acmuic,DC=org`; year OUs and nested month OUs are created beneath it
+- `Provisioning__TimeZone` — calendar time zone for monthly OUs; defaults to `America/Chicago`
 - `Provisioning__DomainController` — optional; defaults to the domain's auto-discovered DC
 
 ## Deploy
@@ -287,10 +344,20 @@ port 2433 already bound).
 
 ## Verify
 
-Run the password error tests with
+Run the Windows API tests with
 `dotnet test ../windows-api.Tests/AcmProvisioning.Tests.csproj` from this directory.
-These test AD error translation and password redaction. Live password changes
-still require the Windows host and a test domain account.
+These test month and year boundaries in Chicago time, duplicate legal names,
+DN escaping, OU creation error classification, failed account setup and cleanup,
+replays of incomplete accounts, event-owned credential retries, overlapping
+requests and cancellation, password changes racing credential reissue in either
+order, AD error translation, and password redaction.
+Live OU and account creation still require the Windows host and a
+test domain account. Verify two different usernames with the same legal name in
+the same month, replay after a month change, and inherited permissions in a newly
+created monthly OU. Existing accounts under the base OU must still support lookup,
+updates, and password changes. Verify a failed credential email can retry with
+the same event ID, while different event IDs and accounts that already changed
+their password cannot obtain a reset.
 
 ```powershell
 # create (sAMAccountName comes from username, not netid)
@@ -308,5 +375,6 @@ curl -H "Authorization: Bearer <token>" -X PATCH http://localhost:2433/users/amo
   -d '{"displayName":"Alex Morgan","email":"alex@example.com"}'
 # → { "samAccountName": "amorga", "existed": true }
 
-Get-ADUser amorga -Properties GivenName, Surname, DisplayName, EmployeeID, Department, Company, EmailAddress
+Get-ADUser amorga -Properties GivenName, Surname, DisplayName, EmployeeID, Department, Company, EmailAddress, DistinguishedName
+# New account DN: CN=amorga,OU=MM,OU=YYYY,OU=ACMUsers,DC=acmuic,DC=org
 ```
