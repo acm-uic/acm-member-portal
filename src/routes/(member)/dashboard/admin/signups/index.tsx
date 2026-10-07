@@ -1,4 +1,7 @@
 import {
+  $,
+  noSerialize,
+  type NoSerialize,
   component$,
   Fragment,
   useSignal,
@@ -28,6 +31,33 @@ import { loadSignupQueue, provisioningErrorText } from "~/lib/signups/queue";
 import { submissionAnswers } from "~/lib/forms/submission-answers";
 import type { FormSchemaDefinition } from "~/lib/types";
 
+type ManualCredentials = {
+  id: string;
+  username: string;
+  oneTimePassword: string;
+  token: string;
+};
+async function requestCredentials(data: {
+  action: "reveal" | "confirm";
+  id: string;
+  token?: string;
+}) {
+  const response = await fetch("/api/signups/credentials/", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    cache: "no-store",
+    body: JSON.stringify(data),
+  });
+  const body = await response.json();
+  if (!response.ok || !body.ok)
+    throw new Error(body.error || "Credential delivery failed. Try again.");
+  return body as {
+    ok: true;
+    username: string;
+    oneTimePassword: string;
+    token: string;
+  };
+}
 const PAGE_SIZE = 50;
 
 /** Review and provisioning queue. UIN requires members.read.restricted. */
@@ -60,8 +90,13 @@ export const useSignupQueue = routeLoader$(async (event) => {
         canEdit: r.status === "pending" && perms.has("signups.approve"),
         canRetry:
           perms.has("provisioning.retry") &&
+          r.credentialDeliveryMode !== "admin" &&
           (r.provisioningStatus === "failed" ||
             r.provisioningStatus === "dead_lettered"),
+        canReveal:
+          perms.has("signups.approve") &&
+          r.status === "approved" &&
+          r.credentialDeliveryMode === "admin",
         provisioningError: provisioningErrorText(r.provisioningError),
         editFields: signupEditFields(
           (schemaDefinition as FormSchemaDefinition | null) ?? { fields: [] },
@@ -87,6 +122,11 @@ export const useEditSignup = routeAction$(saveSignupEdits);
 export const useApproveSignup = routeAction$(async (data, event) => {
   const session = await requirePermission(event, "signups.approve");
   const id = String(data.id ?? "");
+  const mode = z
+    .enum(["email", "admin"])
+    .safeParse(data.deliveryMode ?? "email");
+  if (!mode.success)
+    return { ok: false as const, error: "Choose how to deliver credentials." };
   const eventId = crypto.randomUUID();
 
   const claimed = await db.transaction(async (tx) => {
@@ -106,20 +146,20 @@ export const useApproveSignup = routeAction$(async (data, event) => {
       .returning();
     if (!row) return null;
 
-    await enqueueProvisioning(tx, row, eventId);
+    await enqueueProvisioning(tx, row, eventId, mode.data);
     await tx.insert(auditEvents).values({
       actorId: session.user.id,
       action: "signup.approve",
       targetType: "signup_submission",
       targetId: id,
-      after: { netid: row.netid, eventId },
+      after: { netid: row.netid, eventId, deliveryMode: mode.data },
     });
     return row;
   });
 
   if (!claimed)
     return { ok: false as const, error: "Submission is not pending." };
-  return { ok: true as const };
+  return { ok: true as const, eventId, deliveryMode: mode.data };
 });
 
 export const useDenySignup = routeAction$(async (data, event) => {
@@ -183,6 +223,32 @@ export default component$(() => {
   const savedId = useSignal<string | null>(null);
   const expandedId = useSignal<string | null>(null);
   const actionError = useSignal<string | null>(null);
+  const deliveryModes = useSignal<Record<string, "email" | "admin">>({});
+  const manualBusy = useSignal(false);
+  const manualCredentials = useSignal<NoSerialize<ManualCredentials>>();
+  const passwordCopied = useSignal(false);
+  const reveal = $(async (id: string) => {
+    manualBusy.value = true;
+    actionError.value = null;
+    manualCredentials.value = undefined;
+    passwordCopied.value = false;
+    try {
+      const result = await requestCredentials({ action: "reveal", id });
+      manualCredentials.value = noSerialize({
+        id,
+        username: result.username,
+        oneTimePassword: result.oneTimePassword,
+        token: result.token,
+      });
+    } catch (error) {
+      actionError.value =
+        error instanceof Error
+          ? error.message
+          : "Could not show credentials. Try again.";
+    } finally {
+      manualBusy.value = false;
+    }
+  });
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -195,7 +261,11 @@ export default component$(() => {
     const timer = setInterval(async () => {
       if (
         document.hidden ||
+        manualBusy.value ||
+        manualCredentials.value ||
         refreshing ||
+        manualBusy.value ||
+        !!manualCredentials.value ||
         location.isNavigating ||
         editingId.value ||
         approve.isRunning ||
@@ -231,6 +301,8 @@ export default component$(() => {
           type="button"
           class="mt-sm text-accent text-label cursor-pointer"
           disabled={
+            manualBusy.value ||
+            !!manualCredentials.value ||
             location.isNavigating ||
             editingId.value !== null ||
             edit.isRunning ||
@@ -239,7 +311,13 @@ export default component$(() => {
             retry.isRunning
           }
           onClick$={async () => {
-            if (location.isNavigating || editingId.value !== null) return;
+            if (
+              manualBusy.value ||
+              !!manualCredentials.value ||
+              location.isNavigating ||
+              editingId.value !== null
+            )
+              return;
             actionError.value = null;
             try {
               await navigate(undefined, { replaceState: true, scroll: false });
@@ -336,14 +414,18 @@ export default component$(() => {
                                 ? "Account setup stopped"
                                 : !s.provisioningId
                                   ? "Account setup was not queued"
-                                  : "Waiting to create AD account"}
+                                  : s.credentialDeliveryMode === "admin"
+                                    ? "Awaiting manual credential delivery"
+                                    : "Waiting to create AD account"}
                       </span>
-                      {s.provisioningStatus === "failed" && s.nextAttemptAt && (
-                        <p class="text-text3 text-caption m-0 mt-2xs">
-                          Automatic retry at{" "}
-                          {new Date(s.nextAttemptAt).toLocaleString()}.
-                        </p>
-                      )}
+                      {s.credentialDeliveryMode !== "admin" &&
+                        s.provisioningStatus === "failed" &&
+                        s.nextAttemptAt && (
+                          <p class="text-text3 text-caption m-0 mt-2xs">
+                            Automatic retry at{" "}
+                            {new Date(s.nextAttemptAt).toLocaleString()}.
+                          </p>
+                        )}
                       {s.provisioningStatus === "dead_lettered" && (
                         <p class="text-text3 text-caption m-0 mt-2xs">
                           Automatic retries have stopped.
@@ -355,7 +437,12 @@ export default component$(() => {
                         <button
                           type="button"
                           class="px-sm py-2xs rounded-control border border-border-visible text-text1 text-label cursor-pointer whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
-                          disabled={editingId.value !== null || edit.isRunning}
+                          disabled={
+                            manualBusy.value ||
+                            !!manualCredentials.value ||
+                            editingId.value !== null ||
+                            edit.isRunning
+                          }
                           aria-expanded={expandedId.value === s.id}
                           aria-controls={`signup-details-${s.id}`}
                           aria-label={`${expandedId.value === s.id ? "Hide details" : "View details"} for ${s.username}`}
@@ -370,11 +457,45 @@ export default component$(() => {
                         </button>
                         {s.status === "pending" && (
                           <>
+                            <label class="grid gap-2xs text-caption text-text3">
+                              Credential delivery
+                              <select
+                                aria-label={`Credential delivery for ${s.username}`}
+                                class="bg-surface1 border border-border-visible rounded-control text-text1 px-sm py-2xs"
+                                value={deliveryModes.value[s.id] ?? "email"}
+                                disabled={
+                                  !s.canEdit ||
+                                  location.isNavigating ||
+                                  approve.isRunning ||
+                                  deny.isRunning ||
+                                  edit.isRunning ||
+                                  editingId.value !== null ||
+                                  manualBusy.value ||
+                                  !!manualCredentials.value
+                                }
+                                onChange$={(_, element) => {
+                                  deliveryModes.value = {
+                                    ...deliveryModes.value,
+                                    [s.id]:
+                                      element.value === "admin"
+                                        ? "admin"
+                                        : "email",
+                                  };
+                                }}
+                              >
+                                <option value="email">Send email</option>
+                                <option value="admin">
+                                  Show temporary password
+                                </option>
+                              </select>
+                            </label>
                             <button
                               type="button"
                               class="px-sm py-2xs rounded-control bg-accent text-white text-label cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                               disabled={
                                 !s.canEdit ||
+                                manualBusy.value ||
+                                !!manualCredentials.value ||
                                 location.isNavigating ||
                                 editingId.value !== null ||
                                 edit.isRunning ||
@@ -385,14 +506,23 @@ export default component$(() => {
                                 if (location.isNavigating) return;
                                 actionError.value = null;
                                 try {
+                                  manualBusy.value = true;
                                   const result = await approve.submit({
                                     id: s.id,
+                                    deliveryMode:
+                                      deliveryModes.value[s.id] ?? "email",
                                   });
                                   if (!result.value.ok)
                                     actionError.value = result.value.error;
+                                  else if (
+                                    result.value.deliveryMode === "admin"
+                                  )
+                                    await reveal(result.value.eventId);
                                 } catch {
                                   actionError.value =
                                     "Approval could not be saved. Try again.";
+                                } finally {
+                                  manualBusy.value = false;
                                 }
                               }}
                             >
@@ -403,6 +533,8 @@ export default component$(() => {
                               class="px-sm py-2xs rounded-control border border-border-visible text-text1 text-label cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                               disabled={
                                 !s.canEdit ||
+                                manualBusy.value ||
+                                !!manualCredentials.value ||
                                 location.isNavigating ||
                                 editingId.value !== null ||
                                 edit.isRunning ||
@@ -422,12 +554,39 @@ export default component$(() => {
                             </button>
                           </>
                         )}
+                        {s.canReveal && s.provisioningId && (
+                          <button
+                            type="button"
+                            class="px-sm py-2xs rounded-control bg-accent text-white text-label cursor-pointer disabled:opacity-50"
+                            disabled={
+                              manualBusy.value ||
+                              !!manualCredentials.value ||
+                              location.isNavigating ||
+                              editingId.value !== null ||
+                              edit.isRunning ||
+                              approve.isRunning ||
+                              deny.isRunning ||
+                              retry.isRunning ||
+                              (s.provisioningStatus === "processing" &&
+                                Date.now() -
+                                  new Date(s.provisioningUpdatedAt!).getTime() <
+                                  300_000)
+                            }
+                            onClick$={async () => {
+                              await reveal(s.provisioningId!);
+                            }}
+                          >
+                            Show temporary password
+                          </button>
+                        )}
                         {s.canRetry && s.provisioningId && (
                           <button
                             type="button"
                             class="px-sm py-2xs rounded-control border border-border-visible text-text1 text-label cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                             disabled={
                               retry.isRunning ||
+                              manualBusy.value ||
+                              !!manualCredentials.value ||
                               location.isNavigating ||
                               editingId.value !== null ||
                               edit.isRunning ||
@@ -455,6 +614,119 @@ export default component$(() => {
                       </div>
                     </td>
                   </tr>
+                  {manualCredentials.value?.id === s.provisioningId && (
+                    <tr>
+                      <td colSpan={8} class="pb-md">
+                        <section
+                          aria-label={`Temporary credentials for ${s.displayName}, ${s.username}`}
+                          class="w-[100cqw] max-w-full min-w-0 bg-surface1 border border-border rounded-component p-md grid gap-sm [overflow-wrap:anywhere]"
+                        >
+                          <p class="text-label text-text1 m-0">
+                            Temporary credentials for {s.displayName}{" "}
+                            <span class="font-mono text-text3">
+                              ({s.username})
+                            </span>
+                          </p>
+                          <p class="text-body-sm text-text2 m-0">
+                            Copy these credentials to distribute to the
+                            applicant. They must change their password at first
+                            sign-in. No email will be sent.
+                          </p>
+                          <p class="text-body-sm text-text1 m-0">
+                            Username:{" "}
+                            <span class="font-mono">
+                              {manualCredentials.value.username}
+                            </span>
+                          </p>
+                          <label class="grid gap-2xs text-caption text-text3">
+                            Temporary password
+                            <input
+                              type="text"
+                              readOnly
+                              autoComplete="off"
+                              spellcheck={false}
+                              value={manualCredentials.value.oneTimePassword}
+                              class="min-w-0 w-full rounded-control border border-border-visible bg-surface2 p-sm font-mono text-text1"
+                            />
+                          </label>
+                          <div class="flex flex-wrap gap-sm">
+                            <button
+                              type="button"
+                              class="px-sm py-2xs rounded-control border border-border-visible text-text1 text-label cursor-pointer"
+                              disabled={manualBusy.value}
+                              onClick$={async () => {
+                                const credentials = manualCredentials.value;
+                                if (!credentials) return;
+                                try {
+                                  await navigator.clipboard.writeText(
+                                    `Username: ${credentials.username}\nTemporary password: ${credentials.oneTimePassword}`,
+                                  );
+                                  passwordCopied.value = true;
+                                } catch {
+                                  actionError.value =
+                                    "Could not copy automatically. Select and copy the password above.";
+                                }
+                              }}
+                            >
+                              {passwordCopied.value
+                                ? "Copied"
+                                : "Copy credentials"}
+                            </button>
+                            <button
+                              type="button"
+                              class="px-sm py-2xs rounded-control bg-accent text-white text-label cursor-pointer disabled:opacity-50"
+                              disabled={manualBusy.value}
+                              onClick$={async () => {
+                                const credentials = manualCredentials.value;
+                                if (!credentials || manualBusy.value) return;
+                                manualBusy.value = true;
+                                actionError.value = null;
+                                try {
+                                  await requestCredentials({
+                                    action: "confirm",
+                                    id: credentials.id,
+                                    token: credentials.token,
+                                  });
+                                  manualCredentials.value = undefined;
+                                  await navigate(undefined, {
+                                    replaceState: true,
+                                    scroll: false,
+                                  });
+                                } catch (error) {
+                                  actionError.value =
+                                    error instanceof Error
+                                      ? error.message
+                                      : "Could not finish approval. Try again.";
+                                } finally {
+                                  manualBusy.value = false;
+                                }
+                              }}
+                            >
+                              {manualBusy.value
+                                ? "Saving..."
+                                : "I've copied the password"}
+                            </button>
+                            <button
+                              type="button"
+                              class="px-sm py-2xs rounded-control border border-border-visible text-text1 text-label cursor-pointer"
+                              disabled={manualBusy.value}
+                              onClick$={() => {
+                                manualCredentials.value = undefined;
+                              }}
+                            >
+                              Hide password
+                            </button>
+                          </div>
+                          <p class="text-caption text-text3 m-0">
+                            This signup stays queued until you confirm you have
+                            copied the password. If you hide it or reload before
+                            confirming, showing it again generates a new
+                            temporary password.
+                          </p>
+                        </section>
+                      </td>
+                    </tr>
+                  )}
                   {s.status === "approved" &&
                     (s.provisioningError || !s.provisioningId) && (
                       <tr>
@@ -510,6 +782,8 @@ export default component$(() => {
                             <button
                               type="button"
                               disabled={
+                                manualBusy.value ||
+                                !!manualCredentials.value ||
                                 location.isNavigating ||
                                 editingId.value !== null ||
                                 approve.isRunning ||
@@ -519,6 +793,8 @@ export default component$(() => {
                               class="px-md py-sm rounded-control border border-border-visible text-text1 text-label cursor-pointer disabled:opacity-50"
                               onClick$={() => {
                                 if (
+                                  manualBusy.value ||
+                                  !!manualCredentials.value ||
                                   location.isNavigating ||
                                   editingId.value !== null
                                 )
@@ -747,6 +1023,8 @@ export default component$(() => {
             class="text-accent text-label cursor-pointer disabled:opacity-50"
             disabled={
               queue.value.page === 1 ||
+              manualBusy.value ||
+              !!manualCredentials.value ||
               location.isNavigating ||
               editingId.value !== null ||
               approve.isRunning ||
@@ -755,7 +1033,13 @@ export default component$(() => {
               edit.isRunning
             }
             onClick$={async () => {
-              if (location.isNavigating || editingId.value !== null) return;
+              if (
+                manualBusy.value ||
+                !!manualCredentials.value ||
+                location.isNavigating ||
+                editingId.value !== null
+              )
+                return;
               try {
                 await navigate(`?page=${queue.value.page - 1}`);
               } catch {
@@ -772,6 +1056,8 @@ export default component$(() => {
             class="text-accent text-label cursor-pointer disabled:opacity-50"
             disabled={
               !queue.value.hasNext ||
+              manualBusy.value ||
+              !!manualCredentials.value ||
               location.isNavigating ||
               editingId.value !== null ||
               approve.isRunning ||
@@ -780,7 +1066,13 @@ export default component$(() => {
               edit.isRunning
             }
             onClick$={async () => {
-              if (location.isNavigating || editingId.value !== null) return;
+              if (
+                manualBusy.value ||
+                !!manualCredentials.value ||
+                location.isNavigating ||
+                editingId.value !== null
+              )
+                return;
               try {
                 await navigate(`?page=${queue.value.page + 1}`);
               } catch {

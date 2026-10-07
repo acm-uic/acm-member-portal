@@ -111,6 +111,41 @@ describe("applySqlMigrations (PGlite)", () => {
 		await client.close();
 	});
 
+	it("defaults existing provisioning work to email when adding manual delivery", async () => {
+		const client = new PGlite();
+		const query = pgliteQuery(client);
+		try {
+			await applySqlMigrations(query, { useAdvisoryLock: false });
+			await query(
+				"ALTER TABLE provisioning_events DROP COLUMN credential_delivery_mode, DROP COLUMN credential_reveal_token",
+			);
+			await query('DELETE FROM "_migrations" WHERE name = $1', [
+				"0012_manual_credential_delivery.sql",
+			]);
+			const { rows: submissions } =
+				await query(`INSERT INTO signup_submissions (schema_version_id, first_name, last_name, netid, username, email, answers, status)
+        SELECT id, 'Alex', 'Smith', 'asmith', 'asmith', 'alex@example.com', '{}', 'approved' FROM form_schemas WHERE form_key = 'signup' LIMIT 1 RETURNING id`);
+			await query(
+				"INSERT INTO provisioning_events (submission_id, payload, status, credential_delivery_status) VALUES ($1, '{}', 'failed', 'pending')",
+				[submissions[0].id],
+			);
+			await applySqlMigrations(query, { useAdvisoryLock: false });
+			const { rows } = await query(
+				"SELECT credential_delivery_mode, credential_reveal_token, credential_delivery_status, status FROM provisioning_events",
+			);
+			expect(rows).toEqual([
+				{
+					credential_delivery_mode: "email",
+					credential_reveal_token: null,
+					credential_delivery_status: "pending",
+					status: "failed",
+				},
+			]);
+		} finally {
+			await client.close();
+		}
+	});
+
 	it("preserves queued events when adding credential delivery progress", async () => {
 		const client = new PGlite();
 		const query = pgliteQuery(client);
@@ -203,6 +238,9 @@ describe("applySqlMigrations (PGlite)", () => {
 		// This fixture also omits the provisioning outbox.
 		await query('INSERT INTO "_migrations" ("name") VALUES ($1)', [
 			"0011_credential_delivery_status.sql",
+		]);
+		await query('INSERT INTO "_migrations" ("name") VALUES ($1)', [
+			"0012_manual_credential_delivery.sql",
 		]);
 
 		await applySqlMigrations(query, { useAdvisoryLock: false });
@@ -314,6 +352,7 @@ describe("applySqlMigrations (PGlite)", () => {
 			"0009_signup_username_reservations.sql",
 			"0010_shared_username_claims.sql",
 			"0011_credential_delivery_status.sql",
+			"0012_manual_credential_delivery.sql",
 		]) {
 			await query('INSERT INTO "_migrations" ("name") VALUES ($1)', [name]);
 		}

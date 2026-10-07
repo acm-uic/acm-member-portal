@@ -29,6 +29,8 @@ export async function loadSignupQueue(
       id: provisioningEvents.id,
       status: provisioningEvents.status,
       lastError: provisioningEvents.lastError,
+      credentialDeliveryMode: provisioningEvents.credentialDeliveryMode,
+      updatedAt: provisioningEvents.updatedAt,
       nextAttemptAt: provisioningEvents.nextAttemptAt,
     })
     .from(provisioningEvents)
@@ -59,6 +61,8 @@ export async function loadSignupQueue(
       provisioningId: latestEvent.id,
       provisioningStatus: latestEvent.status,
       provisioningError: latestEvent.lastError,
+      credentialDeliveryMode: latestEvent.credentialDeliveryMode,
+      provisioningUpdatedAt: latestEvent.updatedAt,
       nextAttemptAt: latestEvent.nextAttemptAt,
       ...(includeRestricted ? { uin: signupSubmissions.uin } : {}),
     })

@@ -6,7 +6,10 @@ import {
 } from "../lib/provisioning/outbox.ts";
 import { MAX_ATTEMPTS } from "../lib/provisioning/backoff.ts";
 import { sendCredentialEmail } from "../lib/mail/templates.ts";
-import { randomBytes } from "node:crypto";
+import {
+	provisionAccount,
+	seedLocalMemberLogin,
+} from "../lib/provisioning/account.ts";
 
 /**
  * Drain one provisioning event. Returns false when the queue is empty
@@ -42,32 +45,10 @@ export async function drainOnce(
 			return true;
 		}
 
-		const payload = event.payload as {
-			netid: string;
-			username?: string;
-			firstName: string;
-			lastName: string;
-			preferredName?: string;
-			email: string;
-			displayName: string;
-			uin?: string;
-			department?: string;
-			company?: string;
-			eventId: string;
-		};
-		const username = payload.username || payload.netid;
-
-		const body = process.env.WINDOWS_API_URL
-			? await callWindowsApi(
-					{
-						...payload,
-						username,
-						eventId: event.id,
-						retryCredentialDelivery: true,
-					},
-					fetchImpl,
-				)
-			: stubProvision({ username });
+		const { payload, username, body } = await provisionAccount(
+			event,
+			fetchImpl,
+		);
 
 		if (!body.oneTimePassword && event.credentialDeliveryStatus === "pending") {
 			throw new Error(
@@ -113,148 +94,4 @@ export async function drainOnce(
 	}
 
 	return true;
-}
-
-function stubProvision(payload: { username: string }): {
-	samAccountName: string;
-	existed: boolean;
-	oneTimePassword: string;
-} {
-	const oneTimePassword = `dev-${randomBytes(6).toString("hex")}`;
-	console.log(
-		`[provision stub] created ${payload.username} (OTP written via mail stub)`,
-	);
-	return {
-		samAccountName: payload.username,
-		existed: false,
-		oneTimePassword,
-	};
-}
-
-async function seedLocalMemberLogin(args: {
-	email: string;
-	name: string;
-	password: string;
-	netid: string;
-	username: string;
-	uin?: string;
-	firstName: string;
-	lastName: string;
-	preferredName?: string;
-}): Promise<void> {
-	try {
-		const { auth } = await import("../lib/auth.ts");
-		const { eq } = await import("drizzle-orm");
-		const { db } = await import("../lib/db/index.ts");
-		const { user } = await import("../lib/db/schema.ts");
-
-		const [existing] = await db
-			.select({ id: user.id })
-			.from(user)
-			.where(eq(user.email, args.email))
-			.limit(1);
-		if (existing) return;
-
-		const result = await auth.api.signUpEmail({
-			body: {
-				email: args.email,
-				password: args.password,
-				name: args.name,
-				netid: args.netid,
-				username: args.username,
-				uin: args.uin,
-				firstName: args.firstName,
-				lastName: args.lastName,
-				preferredName: args.preferredName,
-			} as {
-				email: string;
-				password: string;
-				name: string;
-				netid: string;
-				username: string;
-				uin?: string;
-				firstName: string;
-				lastName: string;
-				preferredName?: string;
-			},
-		});
-		if (result?.user) {
-			await db
-				.update(user)
-				.set({
-					netid: args.netid,
-					username: args.username,
-					uin: args.uin ?? null,
-					firstName: args.firstName,
-					lastName: args.lastName,
-					preferredName: args.preferredName ?? null,
-				})
-				.where(eq(user.id, result.user.id));
-			console.log(
-				`[dev] local member login: ${args.email} (password in .data/mail/)`,
-			);
-		}
-	} catch (err) {
-		console.warn("[dev] could not seed member login", err);
-	}
-}
-
-async function callWindowsApi(
-	payload: {
-		netid: string;
-		username: string;
-		firstName: string;
-		lastName: string;
-		preferredName?: string;
-		email: string;
-		displayName: string;
-		uin?: string;
-		department?: string;
-		company?: string;
-		eventId: string;
-		retryCredentialDelivery: boolean;
-	},
-	fetchImpl: typeof fetch,
-): Promise<{
-	samAccountName: string;
-	existed: boolean;
-	oneTimePassword?: string;
-}> {
-	const API_URL = process.env.WINDOWS_API_URL!;
-	const API_TOKEN = process.env.WINDOWS_API_TOKEN!;
-
-	const res = await fetchImpl(`${API_URL}/users`, {
-		method: "POST",
-		headers: {
-			"content-type": "application/json",
-			authorization: `Bearer ${API_TOKEN}`,
-		},
-		body: JSON.stringify(payload),
-		signal: AbortSignal.timeout(30_000),
-	});
-
-	if (!res.ok) {
-		throw new Error(
-			`Provisioning API ${res.status}: ${(await res.text()).slice(0, 500)}`,
-		);
-	}
-
-	const body = await res.json();
-	if (
-		body?.samAccountName !== payload.username ||
-		typeof body.existed !== "boolean" ||
-		(body.oneTimePassword != null &&
-			(typeof body.oneTimePassword !== "string" || !body.oneTimePassword)) ||
-		(!body.existed &&
-			(typeof body.oneTimePassword !== "string" || !body.oneTimePassword))
-	) {
-		throw new Error(
-			"Provisioning API returned an invalid account-creation response.",
-		);
-	}
-	return body as {
-		samAccountName: string;
-		existed: boolean;
-		oneTimePassword?: string;
-	};
 }

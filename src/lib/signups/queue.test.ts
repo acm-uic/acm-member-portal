@@ -11,6 +11,7 @@ import { eq } from "drizzle-orm";
 import type { PortalDb } from "../db";
 import * as tables from "../db/schema";
 import type * as Queue from "./queue";
+import type * as ManualDelivery from "../provisioning/manual-delivery";
 import type * as Outbox from "../provisioning/outbox";
 import type { drainOnce as DrainOnce } from "../../worker/provisioning";
 
@@ -29,6 +30,8 @@ describe("signup queue through AD provisioning", () => {
   let db: PortalDb;
   let queue: typeof Queue;
   let outbox: typeof Outbox;
+  let manual: typeof ManualDelivery;
+  const actorId = crypto.randomUUID();
   let drainOnce: typeof DrainOnce;
   let schemaId: string;
 
@@ -43,6 +46,12 @@ describe("signup queue through AD provisioning", () => {
     ({ db } = await import("../db"));
     queue = await import("./queue");
     outbox = await import("../provisioning/outbox");
+    manual = await import("../provisioning/manual-delivery");
+    await db.insert(tables.user).values({
+      id: actorId,
+      name: "Signup reviewer",
+      email: "reviewer@example.com",
+    });
     ({ drainOnce } = await import("../../worker/provisioning"));
     const [schema] = await db
       .select()
@@ -99,6 +108,216 @@ describe("signup queue through AD provisioning", () => {
       .returning();
     return row!;
   }
+
+  async function manualEvent() {
+    const row = await signup("approved");
+    const id = crypto.randomUUID();
+    await outbox.enqueueProvisioning(db, row, id, "admin");
+    return { row, id };
+  }
+  function credentialsResponse(
+    username: string,
+    oneTimePassword = "manual-secret",
+  ) {
+    return new Response(
+      JSON.stringify({
+        samAccountName: username,
+        existed: true,
+        oneTimePassword,
+      }),
+    );
+  }
+
+  it("shows manual credentials without email or persisted passwords, keeping the signup until acknowledgement", async () => {
+    const { row, id } = await manualEvent();
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(credentialsResponse(row.username));
+    expect(await drainOnce(fetchImpl)).toBe(false);
+    const result = await manual.revealManualCredentials(id, actorId, fetchImpl);
+    expect(result).toMatchObject({
+      username: row.username,
+      oneTimePassword: "manual-secret",
+    });
+    expect(JSON.parse(String(fetchImpl.mock.calls[0]![1]!.body))).toMatchObject(
+      { eventId: id, retryCredentialDelivery: true },
+    );
+    expect(sendCredentialEmail).not.toHaveBeenCalled();
+    expect(await queue.loadSignupQueue(false)).toMatchObject([
+      {
+        id: row.id,
+        credentialDeliveryMode: "admin",
+        provisioningStatus: "pending",
+      },
+    ]);
+    const events = await db.select().from(tables.provisioningEvents);
+    const audit = await db.select().from(tables.auditEvents);
+    expect(
+      JSON.stringify([events, audit, await queue.loadSignupQueue(false)]),
+    ).not.toContain("manual-secret");
+    expect(await drainOnce(fetchImpl)).toBe(false);
+    expect(
+      await manual.confirmManualDelivery(id, crypto.randomUUID(), actorId),
+    ).toBe(false);
+    expect(await manual.confirmManualDelivery(id, result.token, actorId)).toBe(
+      true,
+    );
+    expect(await queue.loadSignupQueue(false)).toEqual([]);
+    expect(await manual.confirmManualDelivery(id, result.token, actorId)).toBe(
+      false,
+    );
+    await expect(
+      manual.revealManualCredentials(id, actorId, fetchImpl),
+    ).rejects.toMatchObject({ status: 409 });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("recovers a lost manual response with fresh credentials and rejects the old acknowledgement", async () => {
+    const { row, id } = await manualEvent();
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(credentialsResponse(row.username, "old-secret"))
+      .mockResolvedValueOnce(credentialsResponse(row.username, "new-secret"));
+    const old = await manual.revealManualCredentials(id, actorId, fetchImpl);
+    vi.resetModules();
+    manual = await import("../provisioning/manual-delivery");
+    const current = await manual.revealManualCredentials(
+      id,
+      actorId,
+      fetchImpl,
+    );
+    expect(current.oneTimePassword).toBe("new-secret");
+    expect(await manual.confirmManualDelivery(id, old.token, actorId)).toBe(
+      false,
+    );
+    expect(await queue.loadSignupQueue(false)).toHaveLength(1);
+    expect(await manual.confirmManualDelivery(id, current.token, actorId)).toBe(
+      true,
+    );
+    expect(await queue.loadSignupQueue(false)).toEqual([]);
+    expect(sendCredentialEmail).not.toHaveBeenCalled();
+  });
+
+  it("retains a failed manual signup without scheduling email and permits a manual retry", async () => {
+    const { row, id } = await manualEvent();
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockRejectedValueOnce(new Error("AD unavailable"))
+      .mockResolvedValueOnce(credentialsResponse(row.username));
+    await expect(
+      manual.revealManualCredentials(id, actorId, fetchImpl),
+    ).rejects.toMatchObject({ status: 502 });
+    expect(await queue.loadSignupQueue(false)).toMatchObject([
+      { provisioningStatus: "failed", provisioningError: "AD unavailable" },
+    ]);
+    expect(await outbox.retryProvisioning(id)).toBe(false);
+    expect(await drainOnce(fetchImpl)).toBe(false);
+    const result = await manual.revealManualCredentials(id, actorId, fetchImpl);
+    expect(await manual.confirmManualDelivery(id, result.token, actorId)).toBe(
+      true,
+    );
+    expect(sendCredentialEmail).not.toHaveBeenCalled();
+  });
+
+  it("rejects overlapping reveals and stale confirmations while a new password is being created", async () => {
+    const { row, id } = await manualEvent();
+    const initial = await manual.revealManualCredentials(
+      id,
+      actorId,
+      vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(credentialsResponse(row.username)),
+    );
+    let release!: (response: Response) => void;
+    let started!: () => void;
+    const claimed = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(() => {
+      started();
+      return new Promise((resolve) => {
+        release = resolve;
+      });
+    });
+    const pending = manual.revealManualCredentials(id, actorId, fetchImpl);
+    await claimed;
+    await expect(
+      manual.revealManualCredentials(id, actorId, fetchImpl),
+    ).rejects.toMatchObject({ status: 409 });
+    expect(await manual.confirmManualDelivery(id, initial.token, actorId)).toBe(
+      false,
+    );
+    expect(await drainOnce(fetchImpl)).toBe(false);
+    release(credentialsResponse(row.username, "next-secret"));
+    const next = await pending;
+    expect(await manual.confirmManualDelivery(id, next.token, actorId)).toBe(
+      true,
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("reclaims a crashed manual request without allowing the email worker to process it", async () => {
+    const { row, id } = await manualEvent();
+    await db
+      .update(tables.provisioningEvents)
+      .set({
+        status: "processing",
+        updatedAt: new Date(Date.now() - 6 * 60_000),
+      })
+      .where(eq(tables.provisioningEvents.id, id));
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(credentialsResponse(row.username));
+    expect(await drainOnce(fetchImpl)).toBe(false);
+    const result = await manual.revealManualCredentials(id, actorId, fetchImpl);
+    expect(await manual.confirmManualDelivery(id, result.token, actorId)).toBe(
+      true,
+    );
+  });
+
+  it("fails manual provisioning in production when the directory API is not configured", async () => {
+    const { id } = await manualEvent();
+    vi.stubEnv("WINDOWS_API_URL", "");
+    vi.stubEnv("NODE_ENV", "production");
+    try {
+      await expect(
+        manual.revealManualCredentials(id, actorId),
+      ).rejects.toMatchObject({ status: 502 });
+      expect(await queue.loadSignupQueue(false)).toMatchObject([
+        {
+          provisioningStatus: "failed",
+          provisioningError: "Directory provisioning is not configured.",
+        },
+      ]);
+      expect(sendCredentialEmail).not.toHaveBeenCalled();
+    } finally {
+      vi.stubEnv("NODE_ENV", "development");
+      vi.stubEnv("WINDOWS_API_URL", "https://directory.example");
+    }
+  });
+
+  it("does not reveal email events or complete manual delivery without a password", async () => {
+    const email = await signup("approved");
+    const emailId = crypto.randomUUID();
+    await outbox.enqueueProvisioning(db, email, emailId);
+    const { row, id } = await manualEvent();
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify({ samAccountName: row.username, existed: true }),
+        ),
+      );
+    await expect(
+      manual.revealManualCredentials(emailId, actorId, fetchImpl),
+    ).rejects.toMatchObject({ status: 409 });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    await expect(
+      manual.revealManualCredentials(id, actorId, fetchImpl),
+    ).rejects.toMatchObject({ status: 502 });
+    expect(await queue.loadSignupQueue(false)).toHaveLength(2);
+    expect(sendCredentialEmail).not.toHaveBeenCalled();
+  });
 
   it("keeps an approved signup through API failure and retry, then removes it after success", async () => {
     const row = await signup();

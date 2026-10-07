@@ -16,10 +16,15 @@ export async function enqueueProvisioning(
 	tx: DbOrTx,
 	submission: Submission,
 	eventId: string,
+	credentialDeliveryMode: "email" | "admin" = "email",
 ): Promise<void> {
 	await tx.insert(provisioningEvents).values({
 		id: eventId,
 		submissionId: submission.id,
+		credentialDeliveryMode,
+		...(credentialDeliveryMode === "admin"
+			? { credentialDeliveryStatus: "pending" as const }
+			: {}),
 		payload: (() => {
 			const answers = (submission.answers ?? {}) as Record<string, unknown>;
 			const major =
@@ -58,6 +63,8 @@ function toEvent(row: Record<string, unknown>): ProvisioningEvent {
 		status: row.status,
 		attempts: row.attempts,
 		credentialDeliveryStatus: row.credential_delivery_status,
+		credentialDeliveryMode: row.credential_delivery_mode,
+		credentialRevealToken: row.credential_reveal_token,
 		nextAttemptAt: row.next_attempt_at,
 		lastError: row.last_error,
 		createdAt: row.created_at,
@@ -78,8 +85,10 @@ export async function claimNext(): Promise<ProvisioningEvent | null> {
         updated_at = now()
     WHERE id = (
       SELECT id FROM provisioning_events
-      WHERE (status IN ('pending', 'failed') AND next_attempt_at <= now())
-         OR (status = 'processing' AND updated_at < now() - interval '5 minutes')
+      WHERE credential_delivery_mode = 'email' AND (
+        (status IN ('pending', 'failed') AND next_attempt_at <= now())
+        OR (status = 'processing' AND updated_at < now() - interval '5 minutes')
+      )
       ORDER BY next_attempt_at
       LIMIT 1
       FOR UPDATE SKIP LOCKED
@@ -139,6 +148,7 @@ export async function retryProvisioning(id: string): Promise<boolean> {
 		.where(
 			and(
 				eq(provisioningEvents.id, id),
+				eq(provisioningEvents.credentialDeliveryMode, "email"),
 				inArray(provisioningEvents.status, ["failed", "dead_lettered"]),
 			),
 		)

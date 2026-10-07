@@ -355,6 +355,13 @@ export const provisioningEvents = pgTable(
       .notNull()
       .default("pending"),
     attempts: integer("attempts").notNull().default(0),
+    credentialDeliveryMode: text("credential_delivery_mode", {
+      enum: ["email", "admin"],
+    })
+      .notNull()
+      .default("email"),
+    // Identifies a manual reveal attempt, never its password. Stale acknowledgements fail.
+    credentialRevealToken: uuid("credential_reveal_token"),
     credentialDeliveryStatus: text("credential_delivery_status", {
       enum: ["pending", "delivered"],
     }),
