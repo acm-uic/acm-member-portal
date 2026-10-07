@@ -196,6 +196,29 @@ Checks time out after 10 seconds. An unconfigured local API reports a
 configuration error. The health endpoint confirms API connectivity; a user
 lookup also checks the backend's ability to query AD.
 
+## Provisioning logs
+
+Admins with `signups.review` can open **Provisioning logs** in the admin
+sidebar at `/dashboard/admin/provisioning/`. Search by applicant name, NetID,
+or account username, filter by provisioning status, and select **View log**
+to see a request's history. The signup queue also links to each request's log.
+The page includes completed requests, the current error, credential delivery
+status, and the next automatic retry when one is scheduled. Dates include
+seconds and an explicit Central time zone, with CST or CDT as appropriate.
+
+Apply `0014_provisioning_logs.sql` before deploying the web app and worker.
+History records queueing, attempts, credential delivery, failures, stopped
+retries, administrator retries, and completion in the same transaction as
+the corresponding state change. Retries retain history even when they reset
+the attempt counter. Committed attempt starts, failures, and email completion
+also emit structured pod logs with a timestamp and request ID. Credentials,
+account payloads, and claim tokens are excluded from diagnostics.
+
+Earlier attempts cannot be reconstructed. Requests created before this update
+still show their current status and latest saved error; history begins when
+the updated app or worker records a transition. The page requires admin access
+and signup-review permission and uses private, uncached responses.
+
 ## Contributing
 
 Check out the [contributing guide](.github/CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md).

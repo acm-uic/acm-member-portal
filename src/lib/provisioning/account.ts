@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { DbOrTx, ProvisioningEvent } from "./outbox.ts";
+import { sanitizeProvisioningError } from "./diagnostics.ts";
 
 type AccountPayload = {
   netid: string;
@@ -195,8 +196,9 @@ async function callWindowsApi(
   });
 
   if (!res.ok) {
+    const responseText = sanitizeProvisioningError(await res.text());
     throw new Error(
-      `Provisioning API ${res.status}: ${(await res.text()).slice(0, 500)}`,
+      `Provisioning API ${res.status}: ${responseText.slice(0, 500)}`,
     );
   }
 

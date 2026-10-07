@@ -13,8 +13,7 @@ function pgliteQuery(client: PGlite) {
 		}
 		const results = await client.exec(text);
 		const last = results[results.length - 1] as
-			| { rows?: Record<string, unknown>[] }
-			| undefined;
+			{ rows?: Record<string, unknown>[] } | undefined;
 		return { rows: last?.rows ?? [] };
 	};
 }
@@ -239,6 +238,50 @@ describe("applySqlMigrations (PGlite)", () => {
 		}
 	});
 
+	it("adds provisioning history without changing existing errors or inventing attempts", async () => {
+		const client = new PGlite();
+		const query = pgliteQuery(client);
+		try {
+			await applySqlMigrations(query, { useAdvisoryLock: false });
+			await query("DROP TABLE provisioning_logs");
+			await query("DROP INDEX provisioning_events_updated_idx");
+			await query('DELETE FROM "_migrations" WHERE name = $1', [
+				"0014_provisioning_logs.sql",
+			]);
+			const { rows: submissions } = await query(`INSERT INTO signup_submissions
+        (schema_version_id, first_name, last_name, netid, username, email, answers, status)
+        SELECT id, 'Alex', 'Smith', 'asmith', 'asmith', 'alex@example.com', '{}', 'approved'
+        FROM form_schemas WHERE form_key = 'signup' LIMIT 1 RETURNING id`);
+			await query(
+				`INSERT INTO provisioning_events (submission_id, payload, status, attempts, last_error)
+        VALUES ($1, '{}', 'failed', 3, 'AD create failed: Access is denied.')`,
+				[submissions[0].id],
+			);
+			await applySqlMigrations(query, { useAdvisoryLock: false });
+			await applySqlMigrations(query, { useAdvisoryLock: false });
+			const { rows } = await query(
+				"SELECT status, attempts, last_error FROM provisioning_events",
+			);
+			expect(rows).toEqual([
+				{
+					status: "failed",
+					attempts: 3,
+					last_error: "AD create failed: Access is denied.",
+				},
+			]);
+			expect((await query("SELECT * FROM provisioning_logs")).rows).toEqual([]);
+			const { rows: indexes } = await query(
+				"SELECT indexdef FROM pg_indexes WHERE indexname = 'provisioning_logs_event_time_idx'",
+			);
+			expect(indexes).toHaveLength(1);
+			expect(indexes[0].indexdef).toContain(
+				"(event_id, created_at DESC, sequence DESC)",
+			);
+		} finally {
+			await client.close();
+		}
+	});
+
 	it("splits legacy signup display_name into first/last/preferred", async () => {
 		const client = new PGlite();
 		const query = pgliteQuery(client);
@@ -287,6 +330,9 @@ describe("applySqlMigrations (PGlite)", () => {
 		await query('INSERT INTO "_migrations" ("name") VALUES ($1)', [
 			"0013_provisioning_claims.sql",
 		]);
+		await query('INSERT INTO "_migrations" ("name") VALUES ($1)', [
+			"0014_provisioning_logs.sql",
+		]);
 
 		await applySqlMigrations(query, { useAdvisoryLock: false });
 
@@ -332,9 +378,7 @@ describe("applySqlMigrations (PGlite)", () => {
         VALUES ('ms-linked', 'linked', 'ms-id', 'microsoft', 'microsoft')`);
 
 			await applySqlMigrations(query, { useAdvisoryLock: false });
-			const { rows } = await query(
-				'SELECT id, netid FROM "user" ORDER BY id',
-			);
+			const { rows } = await query('SELECT id, netid FROM "user" ORDER BY id');
 			expect(rows).toEqual([
 				{ id: "conflict", netid: "taken@acmuic.org" },
 				{ id: "duplicate-a", netid: "duplicate@acmuic.org" },
@@ -399,6 +443,7 @@ describe("applySqlMigrations (PGlite)", () => {
 			"0011_credential_delivery_status.sql",
 			"0012_manual_credential_delivery.sql",
 			"0013_provisioning_claims.sql",
+			"0014_provisioning_logs.sql",
 		]) {
 			await query('INSERT INTO "_migrations" ("name") VALUES ($1)', [name]);
 		}

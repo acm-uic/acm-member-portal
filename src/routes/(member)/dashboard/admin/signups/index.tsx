@@ -8,6 +8,7 @@ import {
   useVisibleTask$,
 } from "@builder.io/qwik";
 import {
+  Link,
   routeAction$,
   routeLoader$,
   useNavigate,
@@ -375,6 +376,14 @@ export default component$(() => {
                       {new Date(s.createdAt).toLocaleDateString()}
                     </td>
                     <td class="py-sm pr-md border-t border-border min-w-60 max-w-md">
+                      {s.provisioningId && (
+                        <Link
+                          href={`/dashboard/admin/provisioning/?event=${encodeURIComponent(s.provisioningId)}`}
+                          class="block text-accent text-caption mb-2xs"
+                        >
+                          View provisioning log
+                        </Link>
+                      )}
                       <span
                         class={
                           s.provisioningStatus === "failed" ||

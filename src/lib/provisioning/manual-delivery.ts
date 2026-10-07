@@ -2,6 +2,8 @@ import { and, eq, sql } from "drizzle-orm";
 import { db } from "../db";
 import { auditEvents, provisioningEvents } from "../db/schema";
 import { provisionAccount, seedLocalMemberLogin } from "./account";
+import { recordProvisioningLog, emitProvisioningLog } from "./logs";
+import { sanitizeProvisioningError } from "./diagnostics";
 
 export class ManualDeliveryError extends Error {
   constructor(
@@ -21,7 +23,8 @@ export async function revealManualCredentials(
   const token = crypto.randomUUID();
   // Claim before touching AD. Manual events are never claimed by the email worker.
   // Replace the receipt on every attempt so an older password cannot be acknowledged.
-  const { rows } = await db.execute<{ id: string }>(sql`
+  const started = await db.transaction(async (tx) => {
+    const { rows } = await tx.execute<{ id: string; attempts: number }>(sql`
     UPDATE provisioning_events AS event
     SET status = 'processing', credential_reveal_token = ${token}::uuid,
         attempts = attempts + 1, updated_at = now(), last_error = NULL
@@ -33,13 +36,21 @@ export async function revealManualCredentials(
         WHERE signup.id = event.submission_id AND signup.status = 'approved')
       AND NOT EXISTS (SELECT 1 FROM provisioning_events AS completed
         WHERE completed.submission_id = event.submission_id AND completed.status = 'provisioned')
-    RETURNING event.id
+    RETURNING event.id, event.attempts
   `);
-  if (!rows.length)
-    throw new ManualDeliveryError(
-      "This account is being created or is no longer available for manual delivery. Refresh its status.",
-      409,
-    );
+    if (!rows.length)
+      throw new ManualDeliveryError(
+        "This account is being created or is no longer available for manual delivery. Refresh its status.",
+        409,
+      );
+    return recordProvisioningLog(tx, {
+      eventId: id,
+      kind: "started",
+      attempt: rows[0]!.attempts,
+      message: "Manual provisioning attempt started.",
+    });
+  });
+  emitProvisioningLog(started);
 
   const ownedAttempt = and(
     eq(provisioningEvents.id, id),
@@ -91,6 +102,13 @@ export async function revealManualCredentials(
         targetId: id,
         after: { username },
       });
+      await recordProvisioningLog(tx, {
+        eventId: id,
+        kind: "credentials_ready",
+        attempt: event.attempts,
+        message:
+          "Temporary credentials are ready for administrator confirmation.",
+      });
       return true;
     });
     if (!ready)
@@ -104,19 +122,27 @@ export async function revealManualCredentials(
       token,
     };
   } catch (error) {
-    await db
-      .update(provisioningEvents)
-      .set({
-        status: "failed",
-        lastError: (error instanceof Error
-          ? error.message
-          : "Manual account setup failed."
-        )
-          .replaceAll(password || "\u0000", "[redacted]")
-          .slice(0, 2000),
-        updatedAt: new Date(),
-      })
-      .where(ownedAttempt);
+    const safeError = sanitizeProvisioningError(
+      error instanceof Error ? error.message : "Manual account setup failed.",
+      [password],
+    );
+    const entry = await db.transaction(async (tx) => {
+      const [updated] = await tx
+        .update(provisioningEvents)
+        .set({ status: "failed", lastError: safeError, updatedAt: new Date() })
+        .where(ownedAttempt)
+        .returning({ attempts: provisioningEvents.attempts });
+      if (!updated) return null;
+      return recordProvisioningLog(tx, {
+        eventId: id,
+        kind: "failed",
+        attempt: updated.attempts,
+        error: safeError,
+        message:
+          "Manual account setup failed; administrator action is required.",
+      });
+    });
+    if (entry) emitProvisioningLog(entry);
     throw new ManualDeliveryError(
       "Account setup failed. Refresh status for details and try again.",
       502,
@@ -149,13 +175,23 @@ export async function confirmManualDelivery(
           eq(provisioningEvents.credentialRevealToken, token),
         ),
       )
-      .returning({ id: provisioningEvents.id });
+      .returning({
+        id: provisioningEvents.id,
+        attempts: provisioningEvents.attempts,
+      });
     if (!updated.length) return false;
     await tx.insert(auditEvents).values({
       actorId,
       action: "signup.credentials_copied",
       targetType: "provisioning_event",
       targetId: id,
+    });
+    await recordProvisioningLog(tx, {
+      eventId: id,
+      kind: "provisioned",
+      attempt: updated[0]!.attempts,
+      message:
+        "Administrator confirmed credential delivery; account setup completed.",
     });
     return true;
   });

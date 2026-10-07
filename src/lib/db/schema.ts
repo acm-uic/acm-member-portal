@@ -379,10 +379,51 @@ export const provisioningEvents = pgTable(
   },
   (t) => [
     index("provisioning_events_claim_idx").on(t.status, t.nextAttemptAt),
+    index("provisioning_events_updated_idx").on(
+      t.updatedAt.desc(),
+      t.id.desc(),
+    ),
     index("provisioning_events_submission_latest_idx").on(
       t.submissionId,
       t.createdAt.desc(),
       t.id.desc(),
+    ),
+  ],
+);
+
+export const provisioningLogs = pgTable(
+  "provisioning_logs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    sequence: bigserial("sequence", { mode: "number" }).notNull(),
+    eventId: uuid("event_id")
+      .notNull()
+      .references(() => provisioningEvents.id, { onDelete: "cascade" }),
+    kind: text("kind", {
+      enum: [
+        "queued",
+        "started",
+        "credentials_pending",
+        "credentials_delivered",
+        "credentials_ready",
+        "provisioned",
+        "failed",
+        "dead_lettered",
+        "retry_requested",
+      ],
+    }).notNull(),
+    attempt: integer("attempt").notNull().default(0),
+    message: text("message").notNull(),
+    error: text("error"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index("provisioning_logs_event_time_idx").on(
+      t.eventId,
+      t.createdAt.desc(),
+      t.sequence.desc(),
     ),
   ],
 );
@@ -404,4 +445,5 @@ export const schema = {
   sigLeaders,
   auditEvents,
   provisioningEvents,
+  provisioningLogs,
 };
