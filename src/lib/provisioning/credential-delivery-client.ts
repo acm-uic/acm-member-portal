@@ -39,11 +39,23 @@ export async function requestCredentials(
     throw new Error(deliveryError);
   }
   if (!response.ok || !("ok" in body) || body.ok !== true) {
-    throw new Error(
-      "error" in body && typeof body.error === "string" && body.error.trim()
-        ? body.error
-        : deliveryError,
-    );
+    // Error bodies may come from a proxy. Keep all displayed messages local.
+    if (response.status === 401) {
+      throw new Error("Sign in to manage signup credentials.");
+    }
+    if (response.status === 403) {
+      throw new Error(
+        "Reload the page and check your permission to manage signup credentials.",
+      );
+    }
+    if (response.status === 409) {
+      throw new Error(
+        data.action === "confirm"
+          ? "These credentials were replaced or already acknowledged. Refresh status before continuing."
+          : "This account is being created or is no longer available for manual delivery. Refresh its status.",
+      );
+    }
+    throw new Error(deliveryError);
   }
   if (data.action === "confirm") return { ok: true };
   if (

@@ -81,14 +81,43 @@ describe("browser credential delivery requests", () => {
       await expect(requestCredentials(confirm, send)).rejects.toThrow(fallback);
     },
   );
-  it("keeps the server's useful conflict message", async () => {
-    const error =
-      "These credentials were replaced or already acknowledged. Refresh status before continuing.";
-    const send = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(Response.json({ ok: false, error }, { status: 409 }));
-    await expect(requestCredentials(confirm, send)).rejects.toThrow(error);
-  });
+  it.each([reveal, confirm])(
+    "uses local messages instead of upstream JSON errors for $action",
+    async (data) => {
+      const messages = new Map([
+        [401, "Sign in to manage signup credentials."],
+        [
+          403,
+          "Reload the page and check your permission to manage signup credentials.",
+        ],
+        [
+          409,
+          data.action === "confirm"
+            ? "These credentials were replaced or already acknowledged. Refresh status before continuing."
+            : "This account is being created or is no longer available for manual delivery. Refresh its status.",
+        ],
+      ]);
+      for (const status of [200, 400, 401, 403, 409, 415, 500, 502, 503]) {
+        const send = vi
+          .fn<typeof fetch>()
+          .mockResolvedValue(
+            Response.json(
+              { ok: false, error: "Private proxy details: temporary-secret" },
+              { status },
+            ),
+          );
+        // Call separately to preserve the request overloads.
+        const request =
+          data.action === "reveal"
+            ? requestCredentials(data, send)
+            : requestCredentials(data, send);
+        await expect(request).rejects.toThrow(
+          new Error(messages.get(status) ?? fallback),
+        );
+        expect(send).toHaveBeenCalledTimes(1);
+      }
+    },
+  );
   it("handles network failures without exposing browser diagnostics or retrying a reveal", async () => {
     const send = vi
       .fn<typeof fetch>()
