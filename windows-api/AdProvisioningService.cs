@@ -140,8 +140,9 @@ public sealed class AdProvisioningService
             }
         });
 
-    public Task<bool> ChangePasswordAsync(string samAccountName, ChangePasswordRequest req) =>
-        Task.Run(() =>
+    public Task<bool> ChangePasswordAsync(
+        string samAccountName, ChangePasswordRequest req, CancellationToken cancellationToken = default) =>
+        AdAccountCreationGate.RunAsync(samAccountName, () =>
         {
             using var user = FindUser(samAccountName);
             if (user is null) return false;
@@ -157,7 +158,7 @@ public sealed class AdProvisioningService
             {
                 throw new PasswordChangeException(AdErrors.PasswordChangeMessage(ex, req.CurrentPassword, req.NewPassword));
             }
-        });
+        }, cancellationToken);
 
     private DirectoryEntry EnsureMonthlyUsersOu(DateTimeOffset createdAt)
     {

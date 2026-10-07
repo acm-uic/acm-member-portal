@@ -73,8 +73,11 @@ change the password at first sign-in. Accounts owned by a different event,
 unmarked existing accounts, and accounts whose password has already been changed
 are never reset by credential retries.
 
-Create and credential-reissue requests for one account are serialized within the
-Windows API process, including username spellings that differ only by case.
+Create, credential-reissue, and password-change requests for one account are
+serialized within the Windows API process, including username spellings that
+differ only by case. A completed user password change is checked before a queued
+credential reissue, which then preserves the user's new password. This gate covers
+password changes through this API; external AD clients do not share it.
 Disconnected requests waiting to run are cancelled. A directory operation that
 has already started retains its gate until it finishes, so a timed-out request
 cannot overwrite credentials issued by a later retry.
@@ -346,7 +349,8 @@ Run the Windows API tests with
 These test month and year boundaries in Chicago time, duplicate legal names,
 DN escaping, OU creation error classification, failed account setup and cleanup,
 replays of incomplete accounts, event-owned credential retries, overlapping
-requests and cancellation, AD error translation, and password redaction.
+requests and cancellation, password changes racing credential reissue in either
+order, AD error translation, and password redaction.
 Live OU and account creation still require the Windows host and a
 test domain account. Verify two different usernames with the same legal name in
 the same month, replay after a month change, and inherited permissions in a newly

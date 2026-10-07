@@ -7,8 +7,8 @@ internal static class AdAccountCreationGate
     private static readonly SemaphoreSlim[] Gates = Enumerable.Range(0, 128)
         .Select(_ => new SemaphoreSlim(1, 1)).ToArray();
 
-    public static async Task<CreateUserResponse> RunAsync(
-        string accountName, Func<CreateUserResponse> operation,
+    public static async Task<T> RunAsync<T>(
+        string accountName, Func<T> operation,
         CancellationToken cancellationToken = default)
     {
         var hash = unchecked((uint)StringComparer.OrdinalIgnoreCase.GetHashCode(accountName));

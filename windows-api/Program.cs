@@ -144,7 +144,7 @@ app.MapPost("/users/{sam}/password", async Task<IResult> (string sam, ChangePass
         return Results.BadRequest(new { error = "Choose a new password that differs from your current password." });
     try
     {
-        var changed = await ad.ChangePasswordAsync(sam, req);
+        var changed = await ad.ChangePasswordAsync(sam, req, context.RequestAborted);
         return changed
             ? Results.Ok(new { ok = true })
             : Results.NotFound(new { error = "No Active Directory account was found for this username." });

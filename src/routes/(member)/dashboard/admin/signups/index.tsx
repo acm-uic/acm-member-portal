@@ -30,6 +30,7 @@ import { formatSignupDisplayName } from "~/lib/forms/fields";
 import { loadSignupQueue, provisioningErrorText } from "~/lib/signups/queue";
 import { submissionAnswers } from "~/lib/forms/submission-answers";
 import type { FormSchemaDefinition } from "~/lib/types";
+import { requestCredentials } from "~/lib/provisioning/credential-delivery-client";
 
 type ManualCredentials = {
   id: string;
@@ -37,27 +38,6 @@ type ManualCredentials = {
   oneTimePassword: string;
   token: string;
 };
-async function requestCredentials(data: {
-  action: "reveal" | "confirm";
-  id: string;
-  token?: string;
-}) {
-  const response = await fetch("/api/signups/credentials/", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    cache: "no-store",
-    body: JSON.stringify(data),
-  });
-  const body = await response.json();
-  if (!response.ok || !body.ok)
-    throw new Error(body.error || "Credential delivery failed. Try again.");
-  return body as {
-    ok: true;
-    username: string;
-    oneTimePassword: string;
-    token: string;
-  };
-}
 const PAGE_SIZE = 50;
 
 /** Review and provisioning queue. UIN requires members.read.restricted. */
