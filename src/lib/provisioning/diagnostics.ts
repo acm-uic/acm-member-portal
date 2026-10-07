@@ -12,12 +12,17 @@ export function sanitizeProvisioningError(
     process.env.BETTER_AUTH_SECRET,
     process.env.DATABASE_URL,
   ]) {
-    if (secret) result = result.replaceAll(secret, "[redacted]");
+    if (secret) {
+      const jsonEscapedSecret = JSON.stringify(secret).slice(1, -1);
+      result = result
+        .replaceAll(jsonEscapedSecret, "[redacted]")
+        .replaceAll(secret, "[redacted]");
+    }
   }
   return result
     .replace(/Bearer\s+[^\s"'\\,}]+/gi, "Bearer [redacted]")
     .replace(
-      /("(?:oneTimePassword|password|token|authorization|clientSecret)"\s*:\s*)"(?:\\.|[^"\\])*(?:"|$)/gi,
+      /("(?:oneTimePassword|password|token|authorization|clientSecret)"\s*:\s*)"(?:\\.|[^"\\])*(?:"|\\?$)/gi,
       '$1"[redacted]"',
     )
     .replace(

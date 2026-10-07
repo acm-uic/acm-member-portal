@@ -22,6 +22,16 @@ describe("safe provisioning errors", () => {
     expect(sanitizeProvisioningError('{"password":"truncated')).toBe(
       '{"password":"[redacted]"',
     );
+    expect(sanitizeProvisioningError('{"password":"truncated\\')).toBe(
+      '{"password":"[redacted]"',
+    );
+    const jsonSensitiveSecret = 'quote"and\\backslash';
+    expect(
+      sanitizeProvisioningError(
+        JSON.stringify({ error: `Request exposed ${jsonSensitiveSecret}` }),
+        [jsonSensitiveSecret],
+      ),
+    ).toBe('{"error":"Request exposed [redacted]"}');
     expect(sanitizeProvisioningError("AD failed\0\\u0000")).toBe("AD failed");
   });
 });

@@ -118,16 +118,20 @@ export async function claimNext(): Promise<ClaimedProvisioningEvent | null> {
 		const row = rows[0];
 		if (!row) return null;
 		const event = toEvent(row);
-		const entry = await recordProvisioningLog(tx, {
-			eventId: event.id,
-			kind: "started",
-			attempt: event.attempts + 1,
-			message: "Email provisioning attempt started.",
-		});
+		const entry =
+			isDeadLettered(event.attempts) &&
+			event.credentialDeliveryStatus !== "delivered"
+				? null
+				: await recordProvisioningLog(tx, {
+						eventId: event.id,
+						kind: "started",
+						attempt: event.attempts + 1,
+						message: "Email provisioning attempt started.",
+					});
 		return { event, entry };
 	});
 	if (!result) return null;
-	emitProvisioningLog(result.entry);
+	if (result.entry) emitProvisioningLog(result.entry);
 	return result.event;
 }
 

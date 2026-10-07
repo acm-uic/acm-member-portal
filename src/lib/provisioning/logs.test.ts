@@ -241,6 +241,48 @@ describe("persistent provisioning diagnostics", () => {
     });
   });
 
+  it("reaps an exhausted crash loop without recording an attempt that never ran", async () => {
+    const { id } = await request();
+    await db
+      .update(tables.provisioningEvents)
+      .set({
+        status: "processing",
+        attempts: 9,
+        claimToken: crypto.randomUUID(),
+        updatedAt: new Date(0),
+      })
+      .where(eq(tables.provisioningEvents.id, id));
+    const fetchImpl = vi.fn<typeof fetch>();
+    await drain(fetchImpl);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    const data = await page.readProvisioningPage(url(id));
+    expect(data.selected).toMatchObject({
+      status: "dead_lettered",
+      attempts: 10,
+    });
+    expect(data.logs.map(({ kind, attempt }) => ({ kind, attempt }))).toEqual([
+      { kind: "dead_lettered", attempt: 10 },
+      { kind: "queued", attempt: 0 },
+    ]);
+  });
+
+  it("timestamps history when the transition is recorded", async () => {
+    const { id } = await request();
+    const logs = await import("./logs");
+    let transitionTime = 0;
+    const entry = await db.transaction(async (tx) => {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      transitionTime = Date.now();
+      return logs.recordProvisioningLog(tx, {
+        eventId: id,
+        kind: "started",
+        attempt: 1,
+        message: "Attempt started after the transaction began.",
+      });
+    });
+    expect(entry.createdAt.getTime()).toBeGreaterThanOrEqual(transitionTime);
+  });
+
   it("records manual failures, fresh attempts, and confirmation without revealing credentials", async () => {
     const { id, username } = await request("admin");
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});

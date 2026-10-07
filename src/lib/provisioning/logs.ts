@@ -11,6 +11,7 @@ export async function recordProvisioningLog(client: DbOrTx, input: LogInput) {
     .values({
       ...input,
       error: input.error ? sanitizeProvisioningError(input.error) : null,
+      createdAt: new Date(),
     })
     .returning();
   return entry!;
