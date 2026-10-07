@@ -215,6 +215,31 @@ describe("persistent provisioning diagnostics", () => {
     }
   });
 
+  it("redacts configured secrets before truncating API failures", async () => {
+    const { id } = await request();
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await drain(
+        vi.fn<typeof fetch>().mockResolvedValue(
+          new Response(`${"x".repeat(490)}private-api-token`, {
+            status: 502,
+          }),
+        ),
+      );
+      const data = await page.readProvisioningPage(url(id));
+      const [event] = await db
+        .select()
+        .from(tables.provisioningEvents)
+        .where(eq(tables.provisioningEvents.id, id));
+      expect(
+        JSON.stringify([data, event!.lastError, errors.mock.calls]),
+      ).not.toContain("private-ap");
+      expect(data.selected!.lastError).toContain("[redacted]");
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
   it("does not record stale workers completing or failing a newer claim", async () => {
     const { id } = await request();
     const old = await outbox.claimNext();
