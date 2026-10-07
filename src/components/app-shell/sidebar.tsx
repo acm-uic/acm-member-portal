@@ -24,6 +24,11 @@ const NAV_ITEMS = [
 
 const ADMIN_NAV_ITEMS = [
 	{
+		href: "/dashboard/admin/provisioning",
+		label: "Provisioning logs",
+		icon: "icon-clipboard-list",
+	},
+	{
 		href: "/dashboard/admin/signups",
 		label: "Signups",
 		icon: "icon-user-plus",

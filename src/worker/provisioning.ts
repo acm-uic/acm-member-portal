@@ -5,6 +5,7 @@ import {
 	markProvisioned,
 	withProvisioningClaim,
 } from "../lib/provisioning/outbox.ts";
+import { sanitizeProvisioningError } from "../lib/provisioning/diagnostics.ts";
 import { MAX_ATTEMPTS } from "../lib/provisioning/backoff.ts";
 import { sendCredentialEmail } from "../lib/mail/templates.ts";
 import {
@@ -40,6 +41,7 @@ export async function drainOnce(
 		return true;
 	}
 
+	let issuedPassword: string | undefined;
 	try {
 		if (event.credentialDeliveryStatus === "delivered") {
 			await markProvisioned(event);
@@ -48,6 +50,7 @@ export async function drainOnce(
 
 		const provisioned = await withProvisioningClaim(event, async (tx) => {
 			const result = await provisionAccount(event, fetchImpl);
+			issuedPassword = result.body.oneTimePassword;
 			if (
 				!result.body.oneTimePassword &&
 				event.credentialDeliveryStatus === "pending"
@@ -100,7 +103,10 @@ export async function drainOnce(
 	} catch (err) {
 		await markFailed(
 			event,
-			err instanceof Error ? err.message : String(err),
+			sanitizeProvisioningError(
+				err instanceof Error ? err.message : String(err),
+				[issuedPassword],
+			),
 			event.attempts + 1,
 		);
 	}
