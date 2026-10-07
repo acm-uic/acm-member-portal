@@ -397,8 +397,8 @@ describe("persistent provisioning diagnostics", () => {
       Array.from({ length: 51 }, (_, i) => ({
         eventId: id,
         kind: "started" as const,
-        message: "Attempt started.",
-        createdAt: new Date(Date.UTC(2026, 9, 7, 16, 0, i)),
+        message: `Attempt ${i} started.`,
+        createdAt: new Date(Date.UTC(2026, 9, 7, 16)),
       })),
     );
     const recent = await page.readProvisioningPage(url(id));
@@ -407,6 +407,9 @@ describe("persistent provisioning diagnostics", () => {
     expect(recent.hasOlderLogs).toBe(true);
     expect(older.logs).toHaveLength(1);
     expect(older.hasOlderLogs).toBe(false);
+    expect(recent.logs[0]!.message).toBe("Attempt 50 started.");
+    expect(recent.logs.at(-1)!.message).toBe("Attempt 1 started.");
+    expect(older.logs[0]!.message).toBe("Attempt 0 started.");
     expect(
       new Set([...recent.logs, ...older.logs].map((entry) => entry.id)).size,
     ).toBe(51);

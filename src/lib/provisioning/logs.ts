@@ -2,7 +2,10 @@ import { provisioningLogs } from "../db/schema.ts";
 import type { DbOrTx } from "./outbox.ts";
 import { sanitizeProvisioningError } from "./diagnostics.ts";
 
-type LogInput = Omit<typeof provisioningLogs.$inferInsert, "id" | "createdAt">;
+type LogInput = Omit<
+  typeof provisioningLogs.$inferInsert,
+  "id" | "sequence" | "createdAt"
+>;
 
 /** Write history in the same transaction as the event's state change. */
 export async function recordProvisioningLog(client: DbOrTx, input: LogInput) {

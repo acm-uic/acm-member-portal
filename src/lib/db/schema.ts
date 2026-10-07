@@ -395,6 +395,7 @@ export const provisioningLogs = pgTable(
   "provisioning_logs",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    sequence: bigserial("sequence", { mode: "number" }).notNull(),
     eventId: uuid("event_id")
       .notNull()
       .references(() => provisioningEvents.id, { onDelete: "cascade" }),
@@ -422,7 +423,7 @@ export const provisioningLogs = pgTable(
     index("provisioning_logs_event_time_idx").on(
       t.eventId,
       t.createdAt.desc(),
-      t.id.desc(),
+      t.sequence.desc(),
     ),
   ],
 );

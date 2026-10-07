@@ -270,6 +270,13 @@ describe("applySqlMigrations (PGlite)", () => {
 				},
 			]);
 			expect((await query("SELECT * FROM provisioning_logs")).rows).toEqual([]);
+			const { rows: indexes } = await query(
+				"SELECT indexdef FROM pg_indexes WHERE indexname = 'provisioning_logs_event_time_idx'",
+			);
+			expect(indexes).toHaveLength(1);
+			expect(indexes[0].indexdef).toContain(
+				"(event_id, created_at DESC, sequence DESC)",
+			);
 		} finally {
 			await client.close();
 		}

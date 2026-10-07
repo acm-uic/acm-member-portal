@@ -3,7 +3,12 @@ export function sanitizeProvisioningError(
   error: string,
   secrets: Array<string | undefined> = [],
 ): string {
-  let result = error;
+  // Decode JSON Unicode escapes before matching known secrets. Avoid escaped
+  // backslashes, which represent a literal `\uNNNN` string rather than a code unit.
+  let result = error.replace(
+    /(?<!\\)\\u([\da-f]{4})/gi,
+    (_, codeUnit: string) => String.fromCharCode(Number.parseInt(codeUnit, 16)),
+  );
   for (const secret of [
     ...secrets,
     process.env.WINDOWS_API_TOKEN,

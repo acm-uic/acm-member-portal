@@ -160,7 +160,10 @@ export async function readProvisioningPage(url: URL) {
         })
         .from(provisioningLogs)
         .where(eq(provisioningLogs.eventId, selectedRow.id))
-        .orderBy(desc(provisioningLogs.createdAt), desc(provisioningLogs.id))
+        .orderBy(
+          desc(provisioningLogs.createdAt),
+          desc(provisioningLogs.sequence),
+        )
         .limit(LOG_PAGE_SIZE + 1)
         .offset((logPage - 1) * LOG_PAGE_SIZE)
     : [];

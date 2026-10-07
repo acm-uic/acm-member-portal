@@ -1,5 +1,6 @@
 CREATE TABLE provisioning_logs (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  sequence bigserial NOT NULL,
   event_id uuid NOT NULL REFERENCES provisioning_events(id) ON DELETE CASCADE,
   kind text NOT NULL CHECK (kind IN (
     'queued', 'started', 'credentials_pending', 'credentials_delivered',
@@ -12,7 +13,7 @@ CREATE TABLE provisioning_logs (
 );
 
 CREATE INDEX provisioning_logs_event_time_idx
-  ON provisioning_logs (event_id, created_at DESC, id DESC);
+  ON provisioning_logs (event_id, created_at DESC, sequence DESC);
 
 CREATE INDEX provisioning_events_updated_idx
   ON provisioning_events (updated_at DESC, id DESC);

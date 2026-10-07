@@ -32,6 +32,16 @@ describe("safe provisioning errors", () => {
         [jsonSensitiveSecret],
       ),
     ).toBe('{"error":"Request exposed [redacted]"}');
+    const unicodeEscaped =
+      'Provisioning API 502: {"error":"Request exposed private\\u0026api-token"}';
+    expect(
+      sanitizeProvisioningError(unicodeEscaped, ["private&api-token"]),
+    ).toBe('Provisioning API 502: {"error":"Request exposed [redacted]"}');
+    expect(
+      sanitizeProvisioningError(unicodeEscaped.slice(0, -2), [
+        "private&api-token",
+      ]),
+    ).not.toContain("private&api-token");
     expect(sanitizeProvisioningError("AD failed\0\\u0000")).toBe("AD failed");
   });
 });
