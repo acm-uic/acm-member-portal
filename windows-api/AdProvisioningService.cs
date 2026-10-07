@@ -81,8 +81,9 @@ public sealed class AdProvisioningService
             }
         });
 
-    public Task<CreateUserResponse> CreateUserAsync(CreateUserRequest req) =>
-        Task.Run(() =>
+    public Task<CreateUserResponse> CreateUserAsync(
+        CreateUserRequest req, CancellationToken cancellationToken = default) =>
+        AdAccountCreationGate.RunAsync(req.AccountName, () =>
         {
             var accountName = req.AccountName;
             try
@@ -105,7 +106,7 @@ public sealed class AdProvisioningService
             {
                 throw new ProvisioningException($"AD create failed: {AdErrors.Format(ex)}");
             }
-        });
+        }, cancellationToken);
 
     public Task<CreateUserResponse> UpdateUserAsync(string currentSam, UpdateUserRequest req) =>
         Task.Run(() =>

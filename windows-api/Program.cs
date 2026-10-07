@@ -76,7 +76,8 @@ app.UseRateLimiter();
 
 app.MapGet("/healthz", () => Results.Ok(new { status = "ok" }));
 
-app.MapPost("/users", async Task<IResult> (CreateUserRequest req, AdProvisioningService ad) =>
+app.MapPost("/users", async Task<IResult> (
+    CreateUserRequest req, AdProvisioningService ad, CancellationToken cancellationToken) =>
 {
     var accountName = req.AccountName;
     if (string.IsNullOrWhiteSpace(accountName) || string.IsNullOrWhiteSpace(req.FirstName)
@@ -88,7 +89,7 @@ app.MapPost("/users", async Task<IResult> (CreateUserRequest req, AdProvisioning
 
     try
     {
-        var result = await ad.CreateUserAsync(req);
+        var result = await ad.CreateUserAsync(req, cancellationToken);
         return Results.Ok(result);
     }
     catch (Exception ex)
