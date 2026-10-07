@@ -82,7 +82,7 @@ export async function seedLocalMemberLogin(args: {
       }
       if (args.reissue && existing.username === args.username) {
         const { hashPassword } = await import("better-auth/crypto");
-        await db
+        const updated = await db
           .update(account)
           .set({
             password: await hashPassword(args.password),
@@ -93,7 +93,11 @@ export async function seedLocalMemberLogin(args: {
               eq(account.userId, existing.id),
               eq(account.providerId, "credential"),
             ),
-          );
+          )
+          .returning({ id: account.id });
+        if (!updated.length) {
+          throw new Error("The development user has no credential account.");
+        }
       }
       return;
     }
@@ -121,6 +125,9 @@ export async function seedLocalMemberLogin(args: {
         preferredName?: string;
       },
     });
+    if (!result?.user) {
+      throw new Error("The development login was not created.");
+    }
     if (result?.user) {
       await db
         .update(user)

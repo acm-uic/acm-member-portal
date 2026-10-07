@@ -60,12 +60,6 @@ export async function drainOnce(
 
 		if (body.oneTimePassword) {
 			await markCredentialDelivery(event.id, "pending");
-			await sendCredentialEmail({
-				to: payload.email,
-				username: body.samAccountName,
-				oneTimePassword: body.oneTimePassword,
-			});
-
 			// Local-only: create an email/password user so the applicant can
 			// sign in without Entra (password = one-time password from mail stub).
 			if (!process.env.WINDOWS_API_URL) {
@@ -79,8 +73,14 @@ export async function drainOnce(
 					firstName: payload.firstName,
 					lastName: payload.lastName,
 					preferredName: payload.preferredName,
+					reissue: true,
 				});
 			}
+			await sendCredentialEmail({
+				to: payload.email,
+				username: body.samAccountName,
+				oneTimePassword: body.oneTimePassword,
+			});
 			await markCredentialDelivery(event.id, "delivered");
 		}
 

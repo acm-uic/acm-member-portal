@@ -575,6 +575,119 @@ describe("signup queue through AD provisioning", () => {
     expect(JSON.stringify(completed)).not.toContain("replacement-secret");
   });
 
+  it.each(["admin", "email"] as const)(
+    "keeps a local signup queued when its OAuth-only user has no password account: %s",
+    async (mode) => {
+      const row = await signup("approved");
+      const id = crypto.randomUUID();
+      const userId = crypto.randomUUID();
+      await db.insert(tables.user).values({
+        id: userId,
+        name: "Alex Smith",
+        email: row.email,
+        username: row.username,
+      });
+      await db.insert(tables.account).values({
+        id: crypto.randomUUID(),
+        userId,
+        providerId: "discord",
+        issuer: "local:oauth:discord",
+        accountId: userId,
+      });
+      await outbox.enqueueProvisioning(db, row, id, mode);
+      vi.stubEnv("WINDOWS_API_URL", "");
+      try {
+        if (mode === "admin") {
+          await expect(
+            manual.revealManualCredentials(id, actorId),
+          ).rejects.toThrow("Account setup failed.");
+        } else {
+          await drainOnce();
+        }
+        expect(await queue.loadSignupQueue(false)).toMatchObject([
+          { id: row.id, provisioningStatus: "failed" },
+        ]);
+        expect(sendCredentialEmail).not.toHaveBeenCalled();
+        const accounts = await db
+          .select()
+          .from(tables.account)
+          .where(eq(tables.account.userId, userId));
+        expect(accounts).toMatchObject([
+          { providerId: "discord", password: null },
+        ]);
+      } finally {
+        vi.stubEnv("WINDOWS_API_URL", "https://directory.example");
+      }
+    },
+  );
+
+  it("updates the local password before emailing a retry after a delivery receipt fails", async () => {
+    const row = await signup("approved");
+    const eventId = crypto.randomUUID();
+    await outbox.enqueueProvisioning(db, row, eventId);
+    const currentOutbox = await import("../provisioning/outbox");
+    const saveDelivery = currentOutbox.markCredentialDelivery;
+    let failReceipt = true;
+    const receipt = vi
+      .spyOn(currentOutbox, "markCredentialDelivery")
+      .mockImplementation(async (id, status) => {
+        if (status === "delivered" && failReceipt) {
+          failReceipt = false;
+          throw new Error("delivery receipt unavailable");
+        }
+        await saveDelivery(id, status);
+      });
+    vi.stubEnv("WINDOWS_API_URL", "");
+    try {
+      const { verifyPassword } = await import("better-auth/crypto");
+      sendCredentialEmail.mockImplementation(async ({ oneTimePassword }) => {
+        const [login] = await db
+          .select({ password: tables.account.password })
+          .from(tables.account)
+          .innerJoin(tables.user, eq(tables.user.id, tables.account.userId))
+          .where(eq(tables.user.email, row.email));
+        expect(login?.password).toBeTruthy();
+        expect(
+          await verifyPassword({
+            hash: login!.password!,
+            password: oneTimePassword,
+          }),
+        ).toBe(true);
+      });
+      await drainOnce();
+      expect(await queue.loadSignupQueue(false)).toMatchObject([
+        {
+          id: row.id,
+          provisioningStatus: "failed",
+          provisioningError: "delivery receipt unavailable",
+        },
+      ]);
+      expect(await outbox.retryProvisioning(eventId)).toBe(true);
+      await drainOnce();
+      expect(sendCredentialEmail).toHaveBeenCalledTimes(2);
+      const firstPassword =
+        sendCredentialEmail.mock.calls[0]![0].oneTimePassword;
+      const latestPassword =
+        sendCredentialEmail.mock.calls[1]![0].oneTimePassword;
+      expect(latestPassword).not.toBe(firstPassword);
+      expect(await queue.loadSignupQueue(false)).toEqual([]);
+      const { auth } = await import("../auth");
+      expect(
+        await auth.api.signInEmail({
+          body: { email: row.email, password: latestPassword },
+        }),
+      ).toMatchObject({ user: { email: row.email, username: row.username } });
+      await expect(
+        auth.api.signInEmail({
+          body: { email: row.email, password: firstPassword },
+        }),
+      ).rejects.toThrow();
+    } finally {
+      receipt.mockRestore();
+      vi.stubEnv("WINDOWS_API_URL", "https://directory.example");
+    }
+  });
+
   it("does not complete pending credential delivery when a replay has no password", async () => {
     const row = await signup("approved");
     const eventId = crypto.randomUUID();
