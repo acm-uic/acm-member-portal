@@ -355,6 +355,7 @@ export const provisioningEvents = pgTable(
       .notNull()
       .default("pending"),
     attempts: integer("attempts").notNull().default(0),
+    claimToken: uuid("claim_token"),
     credentialDeliveryMode: text("credential_delivery_mode", {
       enum: ["email", "admin"],
     })
@@ -376,7 +377,14 @@ export const provisioningEvents = pgTable(
       .notNull()
       .defaultNow(),
   },
-  (t) => [index("provisioning_events_claim_idx").on(t.status, t.nextAttemptAt)],
+  (t) => [
+    index("provisioning_events_claim_idx").on(t.status, t.nextAttemptAt),
+    index("provisioning_events_submission_latest_idx").on(
+      t.submissionId,
+      t.createdAt.desc(),
+      t.id.desc(),
+    ),
+  ],
 );
 
 export const schema = {

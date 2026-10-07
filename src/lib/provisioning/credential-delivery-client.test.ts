@@ -60,6 +60,7 @@ describe("browser credential delivery requests", () => {
       body: JSON.stringify({ ...credentials, oneTimePassword: "" }),
     },
     { status: 200, body: JSON.stringify({ ...credentials, token: null }) },
+    { status: 200, body: JSON.stringify({ ...credentials, token: "invalid" }) },
     { status: 200, body: JSON.stringify({ ...credentials, username: null }) },
     { status: 200, body: JSON.stringify({ ...credentials, ok: "true" }) },
   ])(

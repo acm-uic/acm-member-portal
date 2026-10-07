@@ -627,21 +627,31 @@ describe("signup queue through AD provisioning", () => {
     await outbox.enqueueProvisioning(db, row, eventId);
     const currentOutbox = await import("../provisioning/outbox");
     const saveDelivery = currentOutbox.markCredentialDelivery;
+    const lockClaim = currentOutbox.withProvisioningClaim;
+    let activeTx: Outbox.DbOrTx;
+    const lock = vi
+      .spyOn(currentOutbox, "withProvisioningClaim")
+      .mockImplementation((claim, work) =>
+        lockClaim(claim, async (tx) => {
+          activeTx = tx;
+          return work(tx);
+        }),
+      );
     let failReceipt = true;
     const receipt = vi
       .spyOn(currentOutbox, "markCredentialDelivery")
-      .mockImplementation(async (id, status) => {
+      .mockImplementation(async (claim, status, tx) => {
         if (status === "delivered" && failReceipt) {
           failReceipt = false;
           throw new Error("delivery receipt unavailable");
         }
-        await saveDelivery(id, status);
+        return saveDelivery(claim, status, tx);
       });
     vi.stubEnv("WINDOWS_API_URL", "");
     try {
       const { verifyPassword } = await import("better-auth/crypto");
       sendCredentialEmail.mockImplementation(async ({ oneTimePassword }) => {
-        const [login] = await db
+        const [login] = await activeTx
           .select({ password: tables.account.password })
           .from(tables.account)
           .innerJoin(tables.user, eq(tables.user.id, tables.account.userId))
@@ -684,7 +694,96 @@ describe("signup queue through AD provisioning", () => {
       ).rejects.toThrow();
     } finally {
       receipt.mockRestore();
+      lock.mockRestore();
       vi.stubEnv("WINDOWS_API_URL", "https://directory.example");
+    }
+  });
+
+  it("rejects every progress write and external operation from a reclaimed claim", async () => {
+    const row = await signup("approved");
+    const eventId = crypto.randomUUID();
+    await outbox.enqueueProvisioning(db, row, eventId);
+    const oldClaim = (await outbox.claimNext())!;
+    await db
+      .update(tables.provisioningEvents)
+      .set({ updatedAt: new Date(0) })
+      .where(eq(tables.provisioningEvents.id, eventId));
+    const newClaim = (await outbox.claimNext())!;
+    expect(newClaim.claimToken).not.toBe(oldClaim.claimToken);
+    const work = vi.fn();
+    expect(await outbox.withProvisioningClaim(oldClaim, work)).toEqual({
+      owned: false,
+    });
+    expect(work).not.toHaveBeenCalled();
+    expect(await outbox.markCredentialDelivery(oldClaim, "pending")).toBe(
+      false,
+    );
+    expect(await outbox.markCredentialDelivery(oldClaim, "delivered")).toBe(
+      false,
+    );
+    expect(await outbox.markProvisioned(oldClaim)).toBe(false);
+    expect(await outbox.markFailed(oldClaim, "stale error", 99)).toBe(false);
+    expect(await outbox.markCredentialDelivery(newClaim, "delivered")).toBe(
+      true,
+    );
+    expect(await outbox.markProvisioned(newClaim)).toBe(true);
+    expect(await outbox.markFailed(oldClaim, "late stale error", 99)).toBe(
+      false,
+    );
+    const [completed] = await db
+      .select()
+      .from(tables.provisioningEvents)
+      .where(eq(tables.provisioningEvents.id, eventId));
+    expect(completed).toMatchObject({
+      status: "provisioned",
+      credentialDeliveryStatus: "delivered",
+      claimToken: newClaim.claimToken,
+      lastError: null,
+    });
+  });
+
+  it("does not email the old password when another worker reclaims between directory setup and delivery", async () => {
+    const row = await signup("approved");
+    const eventId = crypto.randomUUID();
+    await outbox.enqueueProvisioning(db, row, eventId);
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(credentialsResponse(row.username, "old-secret"))
+      .mockResolvedValueOnce(credentialsResponse(row.username, "new-secret"));
+    const currentOutbox = await import("../provisioning/outbox");
+    const runClaim = currentOutbox.withProvisioningClaim;
+    let phases = 0;
+    const lock = vi
+      .spyOn(currentOutbox, "withProvisioningClaim")
+      .mockImplementation(async (claim, work) => {
+        if (++phases === 2) {
+          await db
+            .update(tables.provisioningEvents)
+            .set({ updatedAt: new Date(0) })
+            .where(eq(tables.provisioningEvents.id, eventId));
+          await drainOnce(fetchImpl);
+        }
+        return runClaim(claim, work);
+      });
+    try {
+      await drainOnce(fetchImpl);
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      expect(sendCredentialEmail).toHaveBeenCalledExactlyOnceWith({
+        to: row.email,
+        username: row.username,
+        oneTimePassword: "new-secret",
+      });
+      expect(await queue.loadSignupQueue(false)).toEqual([]);
+      const [completed] = await db
+        .select()
+        .from(tables.provisioningEvents)
+        .where(eq(tables.provisioningEvents.id, eventId));
+      expect(completed).toMatchObject({
+        status: "provisioned",
+        credentialDeliveryStatus: "delivered",
+      });
+    } finally {
+      lock.mockRestore();
     }
   });
 
@@ -692,7 +791,10 @@ describe("signup queue through AD provisioning", () => {
     const row = await signup("approved");
     const eventId = crypto.randomUUID();
     await outbox.enqueueProvisioning(db, row, eventId);
-    await outbox.markCredentialDelivery(eventId, "pending");
+    await db
+      .update(tables.provisioningEvents)
+      .set({ credentialDeliveryStatus: "pending" })
+      .where(eq(tables.provisioningEvents.id, eventId));
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(
         JSON.stringify({

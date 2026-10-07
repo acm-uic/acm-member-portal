@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 type RevealRequest = { action: "reveal"; id: string };
 type ConfirmRequest = { action: "confirm"; id: string; token: string };
 type RevealedCredentials = {
@@ -8,6 +10,7 @@ type RevealedCredentials = {
 };
 
 const deliveryError = "Credential delivery failed. Try again.";
+const credentialToken = z.uuid();
 
 export function requestCredentials(
   data: RevealRequest,
@@ -67,7 +70,7 @@ export async function requestCredentials(
     !body.oneTimePassword ||
     !("token" in body) ||
     typeof body.token !== "string" ||
-    !body.token
+    !credentialToken.safeParse(body.token).success
   ) {
     throw new Error(deliveryError);
   }

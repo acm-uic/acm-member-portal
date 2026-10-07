@@ -34,6 +34,11 @@ export async function sendMail(message: {
 	subject: string;
 	text: string;
 }): Promise<void> {
+	if (process.env.NODE_ENV === "production" && !process.env.SMTP_HOST) {
+		throw new Error(
+			"SMTP is not configured. Credential delivery is unavailable.",
+		);
+	}
 	const t = getTransport();
 	if (!t) {
 		const dir = mailDir();

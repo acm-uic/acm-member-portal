@@ -3,6 +3,7 @@ import {
 	markCredentialDelivery,
 	markFailed,
 	markProvisioned,
+	withProvisioningClaim,
 } from "../lib/provisioning/outbox.ts";
 import { MAX_ATTEMPTS } from "../lib/provisioning/backoff.ts";
 import { sendCredentialEmail } from "../lib/mail/templates.ts";
@@ -32,7 +33,7 @@ export async function drainOnce(
 		event.credentialDeliveryStatus !== "delivered"
 	) {
 		await markFailed(
-			event.id,
+			event,
 			"Exceeded max attempts (crash-loop reaper)",
 			event.attempts,
 		);
@@ -41,53 +42,64 @@ export async function drainOnce(
 
 	try {
 		if (event.credentialDeliveryStatus === "delivered") {
-			await markProvisioned(event.id);
+			await markProvisioned(event);
 			return true;
 		}
 
-		const { payload, username, body } = await provisionAccount(
-			event,
-			fetchImpl,
-		);
-
-		if (!body.oneTimePassword && event.credentialDeliveryStatus === "pending") {
-			throw new Error(
-				"AD account exists, but its credential email has not been delivered. " +
-					"The provisioning API could not reissue this signup's temporary credentials. " +
-					"An administrator must verify the account and credential delivery before retrying.",
-			);
-		}
-
-		if (body.oneTimePassword) {
-			await markCredentialDelivery(event.id, "pending");
-			// Local-only: create an email/password user so the applicant can
-			// sign in without Entra (password = one-time password from mail stub).
-			if (!process.env.WINDOWS_API_URL) {
-				await seedLocalMemberLogin({
-					email: payload.email,
-					name: payload.displayName,
-					password: body.oneTimePassword,
-					netid: payload.netid,
-					username,
-					uin: payload.uin,
-					firstName: payload.firstName,
-					lastName: payload.lastName,
-					preferredName: payload.preferredName,
-					reissue: true,
-				});
+		const provisioned = await withProvisioningClaim(event, async (tx) => {
+			const result = await provisionAccount(event, fetchImpl);
+			if (
+				!result.body.oneTimePassword &&
+				event.credentialDeliveryStatus === "pending"
+			) {
+				throw new Error(
+					"AD account exists, but its credential email has not been delivered. " +
+						"The provisioning API could not reissue this signup's temporary credentials. " +
+						"An administrator must verify the account and credential delivery before retrying.",
+				);
 			}
-			await sendCredentialEmail({
-				to: payload.email,
-				username: body.samAccountName,
-				oneTimePassword: body.oneTimePassword,
+			if (result.body.oneTimePassword) {
+				await markCredentialDelivery(event, "pending", tx);
+			}
+			return result;
+		});
+		if (!provisioned.owned) return true;
+		const { payload, username, body } = provisioned.value;
+		const password = body.oneTimePassword;
+		if (password) {
+			const localLogin = {
+				email: payload.email,
+				name: payload.displayName,
+				password,
+				netid: payload.netid,
+				username,
+				uin: payload.uin,
+				firstName: payload.firstName,
+				lastName: payload.lastName,
+				preferredName: payload.preferredName,
+			};
+			// Create a missing local user outside the transaction. Existing hashes
+			// are only reissued below, while this claim owns the delivery lock.
+			if (!process.env.WINDOWS_API_URL) await seedLocalMemberLogin(localLogin);
+			const delivered = await withProvisioningClaim(event, async (tx) => {
+				if (!process.env.WINDOWS_API_URL) {
+					await seedLocalMemberLogin({ ...localLogin, reissue: true }, tx);
+				}
+				await sendCredentialEmail({
+					to: payload.email,
+					username: body.samAccountName,
+					oneTimePassword: password,
+				});
+				await markCredentialDelivery(event, "delivered", tx);
 			});
-			await markCredentialDelivery(event.id, "delivered");
+			if (!delivered.owned) return true;
 		}
-
-		await markProvisioned(event.id);
+		// The receipt commits before completion so a failed completion can retry
+		// without resetting the account or sending another email.
+		await markProvisioned(event);
 	} catch (err) {
 		await markFailed(
-			event.id,
+			event,
 			err instanceof Error ? err.message : String(err),
 			event.attempts + 1,
 		);

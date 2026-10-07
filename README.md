@@ -229,5 +229,10 @@ Check out the [contributing guide](.github/CONTRIBUTING.md) and the [Code of Con
   the password. Recorded delivery survives worker restarts and prevents another
   password reset or email. Apply `0011_credential_delivery_status.sql` through
   the normal migration runner and deploy the updated Windows API before the worker.
+- [ ] Stop existing worker replicas before applying `0013_provisioning_claims.sql`
+  and restarting them with the updated worker. Each claim has a token, and directory
+  and email operations lock the event against reclamation. Stale workers cannot
+  change delivery receipts or complete a newer claim. Production mail requires
+  `SMTP_HOST`; missing configuration fails delivery without writing a mail stub.
 - [ ] Running `kubectl create job --from=cronjob/portal-alumni-digest digest-smoke -n acm-portal`
   smoke-tests the digest with a no-op exit when there are no candidates

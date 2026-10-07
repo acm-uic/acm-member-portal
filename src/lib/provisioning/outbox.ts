@@ -4,9 +4,16 @@ import { provisioningEvents, type signupSubmissions } from "../db/schema.ts";
 import { formatSignupDisplayName, companyForCollege } from "../forms/fields.ts";
 import { nextDelayMs, isDeadLettered } from "./backoff.ts";
 
-type DbOrTx = Pick<typeof db, "insert" | "update" | "execute" | "select">;
+export type DbOrTx = Pick<
+	typeof db,
+	"insert" | "update" | "execute" | "select"
+>;
 type Submission = typeof signupSubmissions.$inferSelect;
 export type ProvisioningEvent = typeof provisioningEvents.$inferSelect;
+export type ProvisioningClaim = Pick<ProvisioningEvent, "id"> & {
+	claimToken: string;
+};
+export type ClaimedProvisioningEvent = ProvisioningEvent & ProvisioningClaim;
 
 /**
  * Enqueue inside the APPROVAL transaction — approval and outbox insert commit
@@ -55,13 +62,14 @@ export async function enqueueProvisioning(
 }
 
 /** Map raw snake_case RETURNING rows onto the drizzle-inferred shape. */
-function toEvent(row: Record<string, unknown>): ProvisioningEvent {
+function toEvent(row: Record<string, unknown>): ClaimedProvisioningEvent {
 	return {
 		id: row.id,
 		submissionId: row.submission_id,
 		payload: row.payload,
 		status: row.status,
 		attempts: row.attempts,
+		claimToken: row.claim_token,
 		credentialDeliveryStatus: row.credential_delivery_status,
 		credentialDeliveryMode: row.credential_delivery_mode,
 		credentialRevealToken: row.credential_reveal_token,
@@ -69,7 +77,7 @@ function toEvent(row: Record<string, unknown>): ProvisioningEvent {
 		lastError: row.last_error,
 		createdAt: row.created_at,
 		updatedAt: row.updated_at,
-	} as ProvisioningEvent;
+	} as ClaimedProvisioningEvent;
 }
 
 /** Atomically claim the next due event (multi-replica safe).
@@ -77,10 +85,11 @@ function toEvent(row: Record<string, unknown>): ProvisioningEvent {
     reclaim increments attempts so crash-loops converge to dead-letter.
     API requests and SMTP waits have timeouts; persisted delivery receipts
     prevent completed delivery from being repeated after a reclaim. */
-export async function claimNext(): Promise<ProvisioningEvent | null> {
+export async function claimNext(): Promise<ClaimedProvisioningEvent | null> {
+	const token = crypto.randomUUID();
 	const { rows } = await db.execute<Record<string, unknown>>(sql`
     UPDATE provisioning_events
-    SET status = 'processing',
+    SET status = 'processing', claim_token = ${token}::uuid,
         attempts = CASE WHEN status = 'processing' THEN attempts + 1 ELSE attempts END,
         updated_at = now()
     WHERE id = (
@@ -99,30 +108,62 @@ export async function claimNext(): Promise<ProvisioningEvent | null> {
 	return row ? toEvent(row) : null;
 }
 
-export async function markProvisioned(id: string): Promise<void> {
-	await db
+function ownedClaim(event: ProvisioningClaim) {
+	return and(
+		eq(provisioningEvents.id, event.id),
+		eq(provisioningEvents.status, "processing"),
+		eq(provisioningEvents.claimToken, event.claimToken),
+	);
+}
+
+/** Lock each external operation against reclamation, and reject expired claims. */
+export async function withProvisioningClaim<T>(
+	event: ProvisioningClaim,
+	operation: (tx: DbOrTx) => Promise<T>,
+): Promise<{ owned: true; value: T } | { owned: false }> {
+	return db.transaction(async (tx) => {
+		const { rows } = await tx.execute(sql`
+      SELECT id FROM provisioning_events
+      WHERE id = ${event.id}::uuid AND status = 'processing'
+        AND claim_token = ${event.claimToken}::uuid
+      FOR UPDATE
+    `);
+		if (!rows.length) return { owned: false };
+		return { owned: true, value: await operation(tx) };
+	});
+}
+
+export async function markProvisioned(
+	event: ProvisioningClaim,
+): Promise<boolean> {
+	const updated = await db
 		.update(provisioningEvents)
 		.set({ status: "provisioned", updatedAt: new Date() })
-		.where(eq(provisioningEvents.id, id));
+		.where(ownedClaim(event))
+		.returning({ id: provisioningEvents.id });
+	return updated.length > 0;
 }
 
 /** Save progress so a restart cannot skip failed mail or reset delivered credentials. */
 export async function markCredentialDelivery(
-	id: string,
+	event: ProvisioningClaim,
 	status: "pending" | "delivered",
-): Promise<void> {
-	await db
+	client: DbOrTx = db,
+): Promise<boolean> {
+	const updated = await client
 		.update(provisioningEvents)
 		.set({ credentialDeliveryStatus: status, updatedAt: new Date() })
-		.where(eq(provisioningEvents.id, id));
+		.where(ownedClaim(event))
+		.returning({ id: provisioningEvents.id });
+	return updated.length > 0;
 }
 
 export async function markFailed(
-	id: string,
+	event: ProvisioningClaim,
 	error: string,
 	attempts: number,
-): Promise<void> {
-	await db
+): Promise<boolean> {
+	const updated = await db
 		.update(provisioningEvents)
 		.set({
 			status: isDeadLettered(attempts) ? "dead_lettered" : "failed",
@@ -131,7 +172,9 @@ export async function markFailed(
 			nextAttemptAt: new Date(Date.now() + nextDelayMs(attempts - 1)),
 			updatedAt: new Date(),
 		})
-		.where(eq(provisioningEvents.id, id));
+		.where(ownedClaim(event))
+		.returning({ id: provisioningEvents.id });
+	return updated.length > 0;
 }
 
 /** Retry failed work atomically without resetting a live or completed event. */
@@ -140,6 +183,7 @@ export async function retryProvisioning(id: string): Promise<boolean> {
 		.update(provisioningEvents)
 		.set({
 			status: "pending",
+			claimToken: null,
 			attempts: 0,
 			nextAttemptAt: new Date(),
 			lastError: null,

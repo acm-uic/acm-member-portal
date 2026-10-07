@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import type { ProvisioningEvent } from "./outbox.ts";
+import type { DbOrTx, ProvisioningEvent } from "./outbox.ts";
 
 type AccountPayload = {
   netid: string;
@@ -53,25 +53,29 @@ function stubProvision(payload: { username: string }): {
   };
 }
 
-export async function seedLocalMemberLogin(args: {
-  email: string;
-  name: string;
-  password: string;
-  netid: string;
-  username: string;
-  uin?: string;
-  firstName: string;
-  lastName: string;
-  preferredName?: string;
-  reissue?: boolean;
-}): Promise<void> {
+export async function seedLocalMemberLogin(
+  args: {
+    email: string;
+    name: string;
+    password: string;
+    netid: string;
+    username: string;
+    uin?: string;
+    firstName: string;
+    lastName: string;
+    preferredName?: string;
+    reissue?: boolean;
+  },
+  client?: DbOrTx,
+): Promise<void> {
   try {
     const { auth } = await import("../auth.ts");
     const { and, eq } = await import("drizzle-orm");
     const { db } = await import("../db/index.ts");
     const { user, account } = await import("../db/schema.ts");
+    const database = client ?? db;
 
-    const [existing] = await db
+    const [existing] = await database
       .select({ id: user.id, username: user.username })
       .from(user)
       .where(eq(user.email, args.email))
@@ -82,7 +86,7 @@ export async function seedLocalMemberLogin(args: {
       }
       if (args.reissue && existing.username === args.username) {
         const { hashPassword } = await import("better-auth/crypto");
-        const updated = await db
+        const updated = await database
           .update(account)
           .set({
             password: await hashPassword(args.password),
@@ -101,6 +105,9 @@ export async function seedLocalMemberLogin(args: {
       }
       return;
     }
+    // Auth signup uses its own transactions. Create first, then update its hash
+    // under the worker's claim lock before delivery.
+    if (client) throw new Error("The development login was not created.");
 
     const result = await auth.api.signUpEmail({
       body: {
