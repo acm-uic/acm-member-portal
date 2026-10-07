@@ -209,5 +209,11 @@ Check out the [contributing guide](.github/CONTRIBUTING.md) and the [Code of Con
   tenant lock, the `admin.access` permission gate, and the k8s Secret wiring)
 - [ ] Approving a signup writes an `audit_events` row and a `provisioning_events`
   row in `pending`; the worker marks it `provisioned` and emails the member
+- [ ] Approved signups stay in the signup queue until provisioning succeeds.
+  The queue shows pending/processing status and the latest error after the first
+  failure, including when automatic retries stop. Authorized officers can retry
+  failed account setup. The page refreshes every five seconds while approved
+  signups remain, without interrupting edits or actions. Successfully provisioned
+  signups leave both the queue and the staff dashboard queue count.
 - [ ] Running `kubectl create job --from=cronjob/portal-alumni-digest digest-smoke -n acm-portal`
   smoke-tests the digest with a no-op exit when there are no candidates

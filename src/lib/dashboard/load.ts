@@ -13,6 +13,7 @@ import {
 } from "~/lib/db/schema";
 import type { PermissionKey } from "~/lib/rbac/permissions";
 import type { DashboardView } from "./view";
+import { signupQueueCondition } from "../signups/queue";
 
 export const OFFICER_ROLE_ID = "00000000-0000-0000-0000-000000000002";
 export const CHART_WEEKS = 20;
@@ -193,7 +194,7 @@ export async function loadStaffDashboard(perms: Set<PermissionKey>) {
 				? db
 						.select({ value: count() })
 						.from(signupSubmissions)
-						.where(eq(signupSubmissions.status, "pending"))
+						.where(signupQueueCondition)
 				: Promise.resolve([{ value: 0 }]),
 			loadAnnouncements(),
 			loadGrowthBars(),
@@ -209,7 +210,7 @@ export async function loadStaffDashboard(perms: Set<PermissionKey>) {
 					createdAt: signupSubmissions.createdAt,
 				})
 				.from(signupSubmissions)
-				.where(eq(signupSubmissions.status, "pending"))
+				.where(signupQueueCondition)
 				.orderBy(desc(signupSubmissions.createdAt))
 				.limit(5)
 		: [];

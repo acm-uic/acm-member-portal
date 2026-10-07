@@ -211,7 +211,18 @@ async function callWindowsApi(
 		);
 	}
 
-	return (await res.json()) as {
+	const body = await res.json();
+	if (
+		body?.samAccountName !== payload.username ||
+		typeof body.existed !== "boolean" ||
+		(!body.existed &&
+			(typeof body.oneTimePassword !== "string" || !body.oneTimePassword))
+	) {
+		throw new Error(
+			"Provisioning API returned an invalid account-creation response.",
+		);
+	}
+	return body as {
 		samAccountName: string;
 		existed: boolean;
 		oneTimePassword?: string;

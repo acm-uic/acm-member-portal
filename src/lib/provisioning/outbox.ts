@@ -1,4 +1,4 @@
-import { eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../db/index.ts";
 import { provisioningEvents, type signupSubmissions } from "../db/schema.ts";
 import { formatSignupDisplayName, companyForCollege } from "../forms/fields.ts";
@@ -113,9 +113,9 @@ export async function markFailed(
 		.where(eq(provisioningEvents.id, id));
 }
 
-/** Officer-initiated retry from the admin panel. */
-export async function retryDeadLetter(id: string): Promise<void> {
-	await db
+/** Retry failed work atomically without resetting a live or completed event. */
+export async function retryProvisioning(id: string): Promise<boolean> {
+	const retried = await db
 		.update(provisioningEvents)
 		.set({
 			status: "pending",
@@ -124,5 +124,12 @@ export async function retryDeadLetter(id: string): Promise<void> {
 			lastError: null,
 			updatedAt: new Date(),
 		})
-		.where(eq(provisioningEvents.id, id));
+		.where(
+			and(
+				eq(provisioningEvents.id, id),
+				inArray(provisioningEvents.status, ["failed", "dead_lettered"]),
+			),
+		)
+		.returning({ id: provisioningEvents.id });
+	return retried.length > 0;
 }

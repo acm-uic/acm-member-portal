@@ -54,12 +54,14 @@ public sealed class AdProvisioningService
     private readonly string _upnSuffix;
     private readonly string _usersOu;
     private readonly string? _domainController;
+    private readonly TimeZoneInfo _timeZone;
 
     public AdProvisioningService(IConfiguration config)
     {
         _upnSuffix = config["Provisioning:UpnSuffix"] ?? throw new InvalidOperationException("Provisioning:UpnSuffix is required");
         _usersOu = config["Provisioning:UsersOu"] ?? throw new InvalidOperationException("Provisioning:UsersOu is required");
         _domainController = config["Provisioning:DomainController"];
+        _timeZone = TimeZoneInfo.FindSystemTimeZoneById(config["Provisioning:TimeZone"] ?? "America/Chicago");
     }
 
     private bool HasExplicitDc => !string.IsNullOrWhiteSpace(_domainController);
@@ -97,21 +99,25 @@ public sealed class AdProvisioningService
                 }
 
                 var password = GeneratePassword();
-                var legalName = $"{req.FirstName} {req.LastName}".Trim();
 
-                using var ou = new DirectoryEntry(UsersLdapPath);
-                using var user = ou.Children.Add($"CN={EscapeDn(legalName)}", "user");
-                user.Properties["sAMAccountName"].Value = accountName;
-                user.Properties["userPrincipalName"].Value = $"{accountName}@{_upnSuffix}";
-                user.Properties["givenName"].Value = req.FirstName;
-                user.Properties["sn"].Value = req.LastName;
-                user.Properties["displayName"].Value = req.DisplayName;
-                user.Properties["mail"].Value = req.Email;
-                if (!string.IsNullOrWhiteSpace(req.Uin)) user.Properties["employeeID"].Value = req.Uin;
-                if (!string.IsNullOrWhiteSpace(req.Department)) user.Properties["department"].Value = req.Department;
-                if (!string.IsNullOrWhiteSpace(req.Company)) user.Properties["company"].Value = req.Company;
-                user.Properties["userAccountControl"].Value = UacCreateDisabled;
-                user.CommitChanges();
+                using var ou = EnsureMonthlyUsersOu(DateTimeOffset.UtcNow);
+                DirectoryEntry created;
+                try
+                {
+                    created = CreateDirectoryUser(ou, req, accountName,
+                        AdUserPlacement.UserRdn(req.FirstName, req.LastName));
+                }
+                catch (Exception ex) when (AdErrors.IsEntryExists(ex))
+                {
+                    using var raced = FindUser(accountName);
+                    if (raced is not null)
+                        return new CreateUserResponse(accountName, true, null);
+
+                    // Another account has this legal name in the same month.
+                    created = CreateDirectoryUser(ou, req, accountName,
+                        AdUserPlacement.UserRdn(req.FirstName, req.LastName, accountName));
+                }
+                using var user = created;
 
                 user.Invoke("SetPassword", password);
                 user.Properties["userAccountControl"].Value = UacEnabled;
@@ -189,6 +195,75 @@ public sealed class AdProvisioningService
             }
         });
 
+    private DirectoryEntry EnsureMonthlyUsersOu(DateTimeOffset createdAt)
+    {
+        var (year, month) = AdUserPlacement.OuNames(createdAt, _timeZone);
+        using var root = new DirectoryEntry(UsersLdapPath);
+        using var yearOu = EnsureChildOu(root, year);
+        return EnsureChildOu(yearOu, month);
+    }
+
+    private DirectoryEntry CreateDirectoryUser(
+        DirectoryEntry ou, CreateUserRequest req, string accountName, string rdn)
+    {
+        var user = ou.Children.Add(rdn, "user");
+        try
+        {
+            user.Properties["sAMAccountName"].Value = accountName;
+            user.Properties["userPrincipalName"].Value = $"{accountName}@{_upnSuffix}";
+            user.Properties["givenName"].Value = req.FirstName;
+            user.Properties["sn"].Value = req.LastName;
+            user.Properties["displayName"].Value = req.DisplayName;
+            user.Properties["mail"].Value = req.Email;
+            if (!string.IsNullOrWhiteSpace(req.Uin)) user.Properties["employeeID"].Value = req.Uin;
+            if (!string.IsNullOrWhiteSpace(req.Department)) user.Properties["department"].Value = req.Department;
+            if (!string.IsNullOrWhiteSpace(req.Company)) user.Properties["company"].Value = req.Company;
+            user.Properties["userAccountControl"].Value = UacCreateDisabled;
+            user.CommitChanges();
+            return user;
+        }
+        catch
+        {
+            user.Dispose();
+            throw;
+        }
+    }
+
+    private static DirectoryEntry EnsureChildOu(DirectoryEntry parent, string name)
+    {
+        var existing = FindChildOu(parent, name);
+        if (existing is not null) return existing;
+
+        var created = parent.Children.Add($"OU={name}", "organizationalUnit");
+        try
+        {
+            created.CommitChanges();
+            return created;
+        }
+        catch (Exception ex)
+        {
+            created.Dispose();
+            // Another request may have created the same OU since our lookup.
+            // Do not hide permission, connectivity, or other directory failures.
+            if (AdErrors.IsEntryExists(ex))
+            {
+                var raced = FindChildOu(parent, name);
+                if (raced is not null) return raced;
+            }
+            throw;
+        }
+    }
+
+    private static DirectoryEntry? FindChildOu(DirectoryEntry parent, string name)
+    {
+        using var searcher = new DirectorySearcher(parent)
+        {
+            Filter = $"(&(objectClass=organizationalUnit)(ou={EscapeFilter(name)}))",
+            SearchScope = SearchScope.OneLevel,
+        };
+        return searcher.FindOne()?.GetDirectoryEntry();
+    }
+
     private DirectoryEntry? FindUser(string samAccountName)
     {
         using var root = new DirectoryEntry(UsersLdapPath);
@@ -221,29 +296,6 @@ public sealed class AdProvisioningService
         return sb.ToString();
     }
 
-    /// <summary>RFC 4514 DN attribute-value escape for a CN RDN.</summary>
-    private static string EscapeDn(string value)
-    {
-        if (value.Length == 0) return value;
-        var sb = new StringBuilder(value.Length + 8);
-        for (var i = 0; i < value.Length; i++)
-        {
-            var c = value[i];
-            var edge = i == 0 || i == value.Length - 1;
-            if (c is ',' or '+' or '"' or '\\' or '<' or '>' or ';' or '='
-                || (edge && c == ' ')
-                || (i == 0 && c == '#'))
-            {
-                sb.Append('\\').Append(c);
-            }
-            else
-            {
-                sb.Append(c);
-            }
-        }
-        return sb.ToString();
-    }
-
     /// <summary>20 chars, 4 complexity classes (AD default policy safe), no ambiguous glyphs.</summary>
     private static string GeneratePassword()
     {
@@ -268,6 +320,17 @@ public sealed class AdProvisioningService
 
 internal static class AdErrors
 {
+    public static bool IsEntryExists(Exception ex)
+    {
+        for (var e = ex; e != null; e = e.InnerException)
+        {
+            // ERROR_ALREADY_EXISTS and ERROR_DS_OBJ_STRING_NAME_EXISTS.
+            if (unchecked((uint)e.HResult) is 0x80071392 or 0x80072071)
+                return true;
+        }
+        return false;
+    }
+
     public static bool IsPasswordRejection(Exception ex)
     {
         // ADSI wraps COM errors in invocation exceptions. Only known credential

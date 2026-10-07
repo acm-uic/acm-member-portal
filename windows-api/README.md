@@ -45,6 +45,25 @@ AD mapping on create: `Name`/`CN`←`"First Last"`, `GivenName`←firstName,
 `"First Last"`), `EmployeeID`←uin, `Department`←major, `Company`←college,
 `EmailAddress`←email.
 
+New accounts go in a month OU nested inside a year OU under `Provisioning:UsersOu`,
+for example `CN=Alex Morgan,OU=10,OU=2026,OU=ACMUsers,DC=acmuic,DC=org`.
+The API uses the actual
+account creation month in `Provisioning:TimeZone`, which defaults to
+`America/Chicago`. It creates missing year and month OUs and reuses existing ones,
+including when concurrent requests create the first accounts of the year or month.
+The base OU must already exist.
+
+If AD reports that the legal-name CN is already taken in that month's OU,
+the API first checks whether the same username was created concurrently. If not,
+it retries with a username suffix, for example `CN=Alex Morgan (amorga)`.
+This allows people with identical legal names in the same month. Their legal
+and display name attributes retain the mapping above. Existing
+accounts keep their current location and CN. Lookups, updates, password changes,
+and create replays search the entire base OU subtree, including older accounts
+directly under the base OU. A replay does not move an existing account into the
+current month's OU. Username changes update the login attributes and retain the
+original CN.
+
 Response: `{ samAccountName, existed, oneTimePassword? }`. `oneTimePassword` is
 returned only when a new account was created. It is never logged or stored.
 Replay against an existing `sAMAccountName` returns `{ existed: true }` with no
@@ -118,6 +137,12 @@ members OU it manages.
    API sets (`givenName`, `sn`, `displayName`, `mail`, `employeeID`, `department`,
    `company`, `sAMAccountName`, `userPrincipalName`, `userAccountControl`,
    `pwdLastSet`).
+   - Add a custom delegation on the base OU and descendant OUs for **Create
+     Organizational Unit objects**. The API needs this to create years under
+     the base OU and months under each year OU.
+   - Ensure the user-management delegation applies to descendant user objects
+     and permits creating users in descendant OUs. New year and month OUs must inherit
+     those permissions and any member Group Policy settings.
 3. Confirm the ACE:
 
    ```powershell
@@ -151,7 +176,8 @@ Environment variables override `appsettings.json`:
 
 - `Provisioning__Token` — shared bearer token (same value as the portal's `WINDOWS_API_TOKEN` k8s Secret)
 - `Provisioning__UpnSuffix` — e.g. `acmuic.org`
-- `Provisioning__UsersOu` — e.g. `OU=ACMUsers,DC=acmuic,DC=org`
+- `Provisioning__UsersOu` — existing base OU, e.g. `OU=ACMUsers,DC=acmuic,DC=org`; year OUs and nested month OUs are created beneath it
+- `Provisioning__TimeZone` — calendar time zone for monthly OUs; defaults to `America/Chicago`
 - `Provisioning__DomainController` — optional; defaults to the domain's auto-discovered DC
 
 ## Deploy
@@ -287,10 +313,15 @@ port 2433 already bound).
 
 ## Verify
 
-Run the password error tests with
+Run the Windows API tests with
 `dotnet test ../windows-api.Tests/AcmProvisioning.Tests.csproj` from this directory.
-These test AD error translation and password redaction. Live password changes
-still require the Windows host and a test domain account.
+These test month and year boundaries in Chicago time, duplicate legal names,
+DN escaping, OU creation error classification, AD error translation, and password
+redaction. Live OU and account creation still require the Windows host and a
+test domain account. Verify two different usernames with the same legal name in
+the same month, replay after a month change, and inherited permissions in a newly
+created monthly OU. Existing accounts under the base OU must still support lookup,
+updates, and password changes.
 
 ```powershell
 # create (sAMAccountName comes from username, not netid)
@@ -308,5 +339,6 @@ curl -H "Authorization: Bearer <token>" -X PATCH http://localhost:2433/users/amo
   -d '{"displayName":"Alex Morgan","email":"alex@example.com"}'
 # → { "samAccountName": "amorga", "existed": true }
 
-Get-ADUser amorga -Properties GivenName, Surname, DisplayName, EmployeeID, Department, Company, EmailAddress
+Get-ADUser amorga -Properties GivenName, Surname, DisplayName, EmployeeID, Department, Company, EmailAddress, DistinguishedName
+# New account DN: CN=Alex Morgan,OU=MM,OU=YYYY,OU=ACMUsers,DC=acmuic,DC=org
 ```
