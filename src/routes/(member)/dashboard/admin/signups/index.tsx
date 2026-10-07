@@ -264,7 +264,7 @@ export default component$(() => {
           No signups awaiting review or account setup on this page.
         </p>
       ) : (
-        <div class="overflow-x-auto">
+        <div class="@container min-w-0 max-w-full overflow-x-auto">
           <table class="w-full text-body-sm border-collapse">
             <thead>
               <tr class="text-left text-text3 text-caption">
@@ -338,23 +338,6 @@ export default component$(() => {
                                   ? "Account setup was not queued"
                                   : "Waiting to create AD account"}
                       </span>
-                      {s.status === "approved" && s.provisioningError && (
-                        <p
-                          role="alert"
-                          class="text-error text-caption m-0 mt-2xs whitespace-pre-wrap break-words"
-                        >
-                          {s.provisioningError}
-                        </p>
-                      )}
-                      {s.status === "approved" && !s.provisioningId && (
-                        <p
-                          role="alert"
-                          class="text-error text-caption m-0 mt-2xs"
-                        >
-                          Approval was saved, but account creation was not
-                          queued. Contact an administrator.
-                        </p>
-                      )}
                       {s.provisioningStatus === "failed" && s.nextAttemptAt && (
                         <p class="text-text3 text-caption m-0 mt-2xs">
                           Automatic retry at{" "}
@@ -472,6 +455,31 @@ export default component$(() => {
                       </div>
                     </td>
                   </tr>
+                  {s.status === "approved" &&
+                    (s.provisioningError || !s.provisioningId) && (
+                      <tr>
+                        <td colSpan={8} class="pb-md">
+                          <section
+                            aria-label={`Account setup error for ${s.displayName}, ${s.username}`}
+                            class="w-[100cqw] max-w-full min-w-0 bg-surface1 border border-border rounded-component p-md grid gap-2xs [overflow-wrap:anywhere]"
+                          >
+                            <p class="text-label text-text1 m-0">
+                              Account setup for {s.displayName}{" "}
+                              <span class="font-mono text-text3">
+                                ({s.username})
+                              </span>
+                            </p>
+                            <p
+                              role="alert"
+                              class="text-error text-body-sm m-0 whitespace-pre-wrap"
+                            >
+                              {s.provisioningError ||
+                                "Approval was saved, but account creation was not queued. Contact an administrator."}
+                            </p>
+                          </section>
+                        </td>
+                      </tr>
+                    )}
                   <tr hidden={expandedId.value !== s.id}>
                     <td colSpan={8} class="pb-md">
                       <section
