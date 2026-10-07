@@ -40,24 +40,21 @@ JSON is camelCase. Required create fields: `username` (or `netid`), `firstName`,
 part of `UserPrincipalName`. If it is omitted, `netid` is used instead. `eventId`
 is correlation-only and is not written to AD.
 
-AD mapping on create: `Name`/`CN`←`"First Last"`, `GivenName`←firstName,
+AD mapping on create: `Name`/`CN`←username (or netid), `GivenName`←firstName,
 `Surname`←lastName, `DisplayName`←displayName (portal sends preferred name or
 `"First Last"`), `EmployeeID`←uin, `Department`←major, `Company`←college,
 `EmailAddress`←email.
 
 New accounts go in a month OU nested inside a year OU under `Provisioning:UsersOu`,
-for example `CN=Alex Morgan,OU=10,OU=2026,OU=ACMUsers,DC=acmuic,DC=org`.
+for example `CN=amorga,OU=10,OU=2026,OU=ACMUsers,DC=acmuic,DC=org`.
 The API uses the actual
 account creation month in `Provisioning:TimeZone`, which defaults to
 `America/Chicago`. It creates missing year and month OUs and reuses existing ones,
 including when concurrent requests create the first accounts of the year or month.
 The base OU must already exist.
 
-If AD reports that the legal-name CN is already taken in that month's OU,
-the API first checks whether the same username was created concurrently. If not,
-it retries with a username suffix, for example `CN=Alex Morgan (amorga)`.
-This allows people with identical legal names in the same month. Their legal
-and display name attributes retain the mapping above. Existing
+Username-based CNs allow people with identical legal names in the same month.
+Their legal and display name attributes retain the mapping above. Existing
 accounts keep their current location and CN. Lookups, updates, password changes,
 and create replays search the entire base OU subtree, including older accounts
 directly under the base OU. A replay does not move an existing account into the
@@ -67,7 +64,14 @@ original CN.
 Response: `{ samAccountName, existed, oneTimePassword? }`. `oneTimePassword` is
 returned only when a new account was created. It is never logged or stored.
 Replay against an existing `sAMAccountName` returns `{ existed: true }` with no
-password.
+password only when the account is enabled and requires a password. Disabled
+accounts or accounts with incomplete password setup return an error, so the
+signup remains in the queue. If password setup or enablement fails for an account
+created by the current request, the API deletes that new account and reports the
+original failure. If deletion also fails, both errors are returned and an
+administrator must repair or remove the incomplete account before retrying.
+Accounts found during an initial lookup or concurrent create are never deleted
+or enabled by a replay.
 
 `PATCH /users/{sam}` body (all fields optional): `{ username, firstName,
 lastName, preferredName, displayName, email, uin }`. Written to AD when set:
@@ -316,8 +320,9 @@ port 2433 already bound).
 Run the Windows API tests with
 `dotnet test ../windows-api.Tests/AcmProvisioning.Tests.csproj` from this directory.
 These test month and year boundaries in Chicago time, duplicate legal names,
-DN escaping, OU creation error classification, AD error translation, and password
-redaction. Live OU and account creation still require the Windows host and a
+DN escaping, OU creation error classification, failed account setup and cleanup,
+replays of incomplete accounts, AD error translation, and password redaction.
+Live OU and account creation still require the Windows host and a
 test domain account. Verify two different usernames with the same legal name in
 the same month, replay after a month change, and inherited permissions in a newly
 created monthly OU. Existing accounts under the base OU must still support lookup,
@@ -340,5 +345,5 @@ curl -H "Authorization: Bearer <token>" -X PATCH http://localhost:2433/users/amo
 # → { "samAccountName": "amorga", "existed": true }
 
 Get-ADUser amorga -Properties GivenName, Surname, DisplayName, EmployeeID, Department, Company, EmailAddress, DistinguishedName
-# New account DN: CN=Alex Morgan,OU=MM,OU=YYYY,OU=ACMUsers,DC=acmuic,DC=org
+# New account DN: CN=amorga,OU=MM,OU=YYYY,OU=ACMUsers,DC=acmuic,DC=org
 ```

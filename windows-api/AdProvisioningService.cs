@@ -41,16 +41,11 @@ public class ProvisioningException(string message) : Exception(message);
 /// <summary>
 /// LDAP/ADSI (System.DirectoryServices). A hosted PowerShell runspace cannot
 /// load RSAT's ActiveDirectory module: SMA looks for built-in modules under
-/// the publish folder, not $PSHOME. Idempotent on sAMAccountName: replay
-/// returns Existed=true with no password.
+/// the publish folder, not $PSHOME. Idempotent on sAMAccountName: replay of
+/// a fully initialized account returns Existed=true with no password.
 /// </summary>
 public sealed class AdProvisioningService
 {
-    // ADS_UF_NORMAL_ACCOUNT | ACCOUNTDISABLE | PASSWD_NOTREQD — password is
-    // set in a second commit, so the account is created disabled first.
-    private const int UacCreateDisabled = 0x200 | 0x002 | 0x020;
-    private const int UacEnabled = 0x200;
-
     private readonly string _upnSuffix;
     private readonly string _usersOu;
     private readonly string? _domainController;
@@ -90,56 +85,22 @@ public sealed class AdProvisioningService
             var accountName = req.AccountName;
             try
             {
-                using (var existing = FindUser(accountName))
-                {
-                    if (existing is not null)
+                return AdAccountCreation.Create(accountName,
+                    () =>
                     {
-                        return new CreateUserResponse(accountName, true, null);
-                    }
-                }
-
-                var password = GeneratePassword();
-
-                using var ou = EnsureMonthlyUsersOu(DateTimeOffset.UtcNow);
-                DirectoryEntry created;
-                try
-                {
-                    created = CreateDirectoryUser(ou, req, accountName,
-                        AdUserPlacement.UserRdn(req.FirstName, req.LastName));
-                }
-                catch (Exception ex) when (AdErrors.IsEntryExists(ex))
-                {
-                    using var raced = FindUser(accountName);
-                    if (raced is not null)
-                        return new CreateUserResponse(accountName, true, null);
-
-                    // Another account has this legal name in the same month.
-                    created = CreateDirectoryUser(ou, req, accountName,
-                        AdUserPlacement.UserRdn(req.FirstName, req.LastName, accountName));
-                }
-                using var user = created;
-
-                user.Invoke("SetPassword", password);
-                user.Properties["userAccountControl"].Value = UacEnabled;
-                user.Properties["pwdLastSet"].Value = 0;
-                user.CommitChanges();
-
-                return new CreateUserResponse(accountName, false, password);
+                        var existing = FindUser(accountName);
+                        return existing is null ? null : new DirectoryAccount(existing);
+                    },
+                    () =>
+                    {
+                        using var ou = EnsureMonthlyUsersOu(DateTimeOffset.UtcNow);
+                        return new DirectoryAccount(CreateDirectoryUser(ou, req, accountName,
+                            AdUserPlacement.UserRdn(accountName)));
+                    },
+                    GeneratePassword);
             }
             catch (Exception ex) when (ex is not ProvisioningException)
             {
-                try
-                {
-                    using var raced = FindUser(accountName);
-                    if (raced is not null)
-                    {
-                        return new CreateUserResponse(accountName, true, null);
-                    }
-                }
-                catch
-                {
-                    // surface the original create failure
-                }
                 throw new ProvisioningException($"AD create failed: {AdErrors.Format(ex)}");
             }
         });
@@ -218,7 +179,7 @@ public sealed class AdProvisioningService
             if (!string.IsNullOrWhiteSpace(req.Uin)) user.Properties["employeeID"].Value = req.Uin;
             if (!string.IsNullOrWhiteSpace(req.Department)) user.Properties["department"].Value = req.Department;
             if (!string.IsNullOrWhiteSpace(req.Company)) user.Properties["company"].Value = req.Company;
-            user.Properties["userAccountControl"].Value = UacCreateDisabled;
+            user.Properties["userAccountControl"].Value = AdAccountCreation.UacCreateDisabled;
             user.CommitChanges();
             return user;
         }
@@ -227,6 +188,23 @@ public sealed class AdProvisioningService
             user.Dispose();
             throw;
         }
+    }
+
+    private sealed class DirectoryAccount(DirectoryEntry user) : IAdProvisioningAccount
+    {
+        public int UserAccountControl => Convert.ToInt32(user.Properties["userAccountControl"].Value);
+
+        public void SetPassword(string password) => user.Invoke("SetPassword", password);
+
+        public void Enable()
+        {
+            user.Properties["userAccountControl"].Value = AdAccountCreation.UacEnabled;
+            user.Properties["pwdLastSet"].Value = 0;
+            user.CommitChanges();
+        }
+
+        public void Delete() => user.DeleteTree();
+        public void Dispose() => user.Dispose();
     }
 
     private static DirectoryEntry EnsureChildOu(DirectoryEntry parent, string name)
@@ -324,7 +302,7 @@ internal static class AdErrors
     {
         for (var e = ex; e != null; e = e.InnerException)
         {
-            // ERROR_ALREADY_EXISTS and ERROR_DS_OBJ_STRING_NAME_EXISTS.
+            // ERROR_OBJECT_ALREADY_EXISTS and ERROR_DS_OBJ_STRING_NAME_EXISTS.
             if (unchecked((uint)e.HResult) is 0x80071392 or 0x80072071)
                 return true;
         }

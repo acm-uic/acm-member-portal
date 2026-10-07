@@ -12,12 +12,7 @@ internal static class AdUserPlacement
             localTime.ToString("MM", CultureInfo.InvariantCulture));
     }
 
-    public static string UserRdn(string firstName, string lastName, string? collisionUsername = null)
-    {
-        var legalName = $"{firstName} {lastName}".Trim();
-        var name = collisionUsername is null ? legalName : $"{legalName} ({collisionUsername})";
-        return $"CN={EscapeDn(name)}";
-    }
+    public static string UserRdn(string accountName) => $"CN={EscapeDn(accountName)}";
 
     /// <summary>RFC 4514 DN attribute-value escape for a CN RDN.</summary>
     private static string EscapeDn(string value)

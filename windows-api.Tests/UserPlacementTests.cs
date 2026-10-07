@@ -37,33 +37,33 @@ public class UserPlacementTests
     }
 
     [Fact]
-    public void UsesLegalNameWithUsernameSuffixForACollision()
+    public void SharedLegalNamesUseDistinctUsernameCns()
     {
         var first = new CreateUserRequest("asmith", "Alex", "Smith", "Alex Smith",
             "first@example.com", null, "event-1", Username: "asmith");
         var second = first with { Username = "asmith2", EventId = "event-2" };
-        Assert.Equal("CN=Alex Smith", AdUserPlacement.UserRdn(first.FirstName, first.LastName));
-        var firstFallback = AdUserPlacement.UserRdn(first.FirstName, first.LastName, first.AccountName);
-        var secondFallback = AdUserPlacement.UserRdn(second.FirstName, second.LastName, second.AccountName);
-        Assert.NotEqual(firstFallback, secondFallback);
-        Assert.Equal("CN=Alex Smith (asmith2)", secondFallback);
+        Assert.Equal("CN=asmith", AdUserPlacement.UserRdn(first.AccountName));
+        Assert.Equal("CN=asmith2", AdUserPlacement.UserRdn(second.AccountName));
         Assert.Equal(first.DisplayName, second.DisplayName);
     }
 
     [Theory]
-    [InlineData("a,b+c", "CN=a\\,b\\+c Smith")]
-    [InlineData("#name", "CN=\\#name Smith")]
-    [InlineData("a\\b", "CN=a\\\\b Smith")]
-    [InlineData("a\0b", "CN=a\\00b Smith")]
-    public void LegalNameCannotChangeTheDistinguishedNameStructure(string firstName, string expected)
+    [InlineData("a,b+c", "CN=a\\,b\\+c")]
+    [InlineData("#name", "CN=\\#name")]
+    [InlineData("a\\b", "CN=a\\\\b")]
+    [InlineData("a\0b", "CN=a\\00b")]
+    [InlineData(" name ", "CN=\\ name\\ ")]
+    public void AccountNameCannotChangeTheDistinguishedNameStructure(string accountName, string expected)
     {
-        Assert.Equal(expected, AdUserPlacement.UserRdn(firstName, "Smith"));
+        Assert.Equal(expected, AdUserPlacement.UserRdn(accountName));
     }
 
     [Fact]
-    public void CollisionSuffixCannotChangeTheDistinguishedNameStructure()
+    public void MissingUsernameUsesNetidForCn()
     {
-        Assert.Equal("CN=Alex Smith (a\\,b\\+c)", AdUserPlacement.UserRdn("Alex", "Smith", "a,b+c"));
+        var request = new CreateUserRequest("asmith", "Alex", "Smith", "Alex Smith",
+            "first@example.com", null, "event-1");
+        Assert.Equal("CN=asmith", AdUserPlacement.UserRdn(request.AccountName));
     }
 
     [Theory]
