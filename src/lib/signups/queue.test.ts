@@ -14,6 +14,9 @@ import type * as Queue from "./queue";
 import type * as Outbox from "../provisioning/outbox";
 import type { drainOnce as DrainOnce } from "../../worker/provisioning";
 
+const sendCredentialEmail = vi.hoisted(() => vi.fn());
+vi.mock("../mail/templates", () => ({ sendCredentialEmail }));
+
 function resetDb() {
   globalThis.__portalDb = undefined;
   globalThis.__portalEmbedded = undefined;
@@ -50,6 +53,7 @@ describe("signup queue through AD provisioning", () => {
   });
 
   beforeEach(async () => {
+    sendCredentialEmail.mockReset().mockResolvedValue(undefined);
     await db.delete(tables.provisioningEvents);
     await db.delete(tables.signupSubmissions);
   });
@@ -282,5 +286,172 @@ describe("signup queue through AD provisioning", () => {
       ),
     ).toBe("ENTRY_EXISTS");
     expect(queue.provisioningErrorText(null)).toBeNull();
+    expect(queue.provisioningErrorText("Provisioning API 502: null")).toBe(
+      "Provisioning API 502: null",
+    );
+  });
+
+  it("retains failed credential delivery across worker reloads and sends reissued credentials on retry", async () => {
+    const row = await signup("approved");
+    const eventId = crypto.randomUUID();
+    await outbox.enqueueProvisioning(db, row, eventId);
+    sendCredentialEmail.mockRejectedValueOnce(new Error("SMTP unavailable"));
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            samAccountName: row.username,
+            existed: false,
+            oneTimePassword: "initial-secret",
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            samAccountName: row.username,
+            existed: true,
+            oneTimePassword: "replacement-secret",
+          }),
+        ),
+      );
+    await drainOnce(fetchImpl);
+    expect(await queue.loadSignupQueue(false)).toMatchObject([
+      {
+        id: row.id,
+        provisioningStatus: "failed",
+        provisioningError: "SMTP unavailable",
+      },
+    ]);
+    const [failed] = await db
+      .select()
+      .from(tables.provisioningEvents)
+      .where(eq(tables.provisioningEvents.id, eventId));
+    expect(failed!.credentialDeliveryStatus).toBe("pending");
+    expect(JSON.stringify(failed)).not.toContain("initial-secret");
+
+    // Reload the worker to ensure recovery does not depend on an in-memory password.
+    vi.resetModules();
+    ({ drainOnce } = await import("../../worker/provisioning"));
+    expect(await outbox.retryProvisioning(eventId)).toBe(true);
+    await drainOnce(fetchImpl);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const retryPayload = JSON.parse(String(fetchImpl.mock.calls[1]![1]!.body));
+    expect(retryPayload).toMatchObject({
+      eventId,
+      retryCredentialDelivery: true,
+    });
+    expect(sendCredentialEmail).toHaveBeenLastCalledWith({
+      to: row.email,
+      username: row.username,
+      oneTimePassword: "replacement-secret",
+    });
+    expect(await queue.loadSignupQueue(false)).toEqual([]);
+    const [completed] = await db
+      .select()
+      .from(tables.provisioningEvents)
+      .where(eq(tables.provisioningEvents.id, eventId));
+    expect(completed!.credentialDeliveryStatus).toBe("delivered");
+    expect(JSON.stringify(completed)).not.toContain("replacement-secret");
+  });
+
+  it("does not complete pending credential delivery when a replay has no password", async () => {
+    const row = await signup("approved");
+    const eventId = crypto.randomUUID();
+    await outbox.enqueueProvisioning(db, row, eventId);
+    await outbox.markCredentialDelivery(eventId, "pending");
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          samAccountName: row.username,
+          existed: true,
+        }),
+      ),
+    );
+    await drainOnce(fetchImpl);
+    expect(await queue.loadSignupQueue(false)).toMatchObject([
+      { id: row.id, provisioningStatus: "failed" },
+    ]);
+    expect(sendCredentialEmail).not.toHaveBeenCalled();
+  });
+
+  it("does not reissue or resend credentials if event completion fails after delivery", async () => {
+    const row = await signup("approved");
+    const eventId = crypto.randomUUID();
+    await outbox.enqueueProvisioning(db, row, eventId);
+    const currentOutbox = await import("../provisioning/outbox");
+    const completion = vi
+      .spyOn(currentOutbox, "markProvisioned")
+      .mockRejectedValueOnce(new Error("completion unavailable"));
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          samAccountName: row.username,
+          existed: false,
+          oneTimePassword: "initial-secret",
+        }),
+      ),
+    );
+    try {
+      await drainOnce(fetchImpl);
+      const [failed] = await db
+        .select()
+        .from(tables.provisioningEvents)
+        .where(eq(tables.provisioningEvents.id, eventId));
+      expect(failed).toMatchObject({
+        status: "failed",
+        credentialDeliveryStatus: "delivered",
+      });
+      await outbox.retryProvisioning(eventId);
+      await drainOnce(fetchImpl);
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(sendCredentialEmail).toHaveBeenCalledTimes(1);
+      expect(await queue.loadSignupQueue(false)).toEqual([]);
+    } finally {
+      completion.mockRestore();
+    }
+  });
+
+  it("recovers a lost account-creation response using the event-owned credential retry", async () => {
+    const row = await signup("approved");
+    const eventId = crypto.randomUUID();
+    await outbox.enqueueProvisioning(db, row, eventId);
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockRejectedValueOnce(new Error("response lost"))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            samAccountName: row.username,
+            existed: true,
+            oneTimePassword: "replacement-secret",
+          }),
+        ),
+      );
+    await drainOnce(fetchImpl);
+    await outbox.retryProvisioning(eventId);
+    await drainOnce(fetchImpl);
+    expect(sendCredentialEmail).toHaveBeenCalledTimes(1);
+    expect(await queue.loadSignupQueue(false)).toEqual([]);
+  });
+
+  it("rejects malformed passwords even on an existing-account response", async () => {
+    const row = await signup("approved");
+    await outbox.enqueueProvisioning(db, row, crypto.randomUUID());
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          samAccountName: row.username,
+          existed: true,
+          oneTimePassword: 123,
+        }),
+      ),
+    );
+    await drainOnce(fetchImpl);
+    expect(await queue.loadSignupQueue(false)).toMatchObject([
+      { id: row.id, provisioningStatus: "failed" },
+    ]);
+    expect(sendCredentialEmail).not.toHaveBeenCalled();
   });
 });

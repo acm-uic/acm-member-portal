@@ -17,6 +17,10 @@ function getTransport() {
 			host: process.env.SMTP_HOST,
 			port: Number(process.env.SMTP_PORT ?? 587),
 			secure: Number(process.env.SMTP_PORT ?? 587) === 465,
+			// Fail stalled mail promptly so credential delivery can be retried.
+			connectionTimeout: 30_000,
+			greetingTimeout: 30_000,
+			socketTimeout: 60_000,
 			auth: process.env.SMTP_USER
 				? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
 				: undefined,

@@ -1,5 +1,6 @@
 import {
 	claimNext,
+	markCredentialDelivery,
 	markFailed,
 	markProvisioned,
 } from "../lib/provisioning/outbox.ts";
@@ -9,9 +10,9 @@ import { randomBytes } from "node:crypto";
 
 /**
  * Drain one provisioning event. Returns false when the queue is empty
- * (caller backs off). Idempotency lives API-side: the Windows API keys on
- * sAMAccountName (signup username) and returns existed:true on replay; in that
- * case no password is returned and no email is sent.
+ * (caller backs off). Undelivered credentials can be reissued only for an
+ * account owned by this event. Delivery receipts survive worker restarts;
+ * temporary passwords are never persisted.
  *
  * When WINDOWS_API_URL is unset, stubs AD creation locally (dev / PGlite).
  */
@@ -23,7 +24,10 @@ export async function drainOnce(
 
 	// Crash-loop guard: a repeatedly reclaimed event exhausts its attempts
 	// without ever reaching markFailed — dead-letter it instead of re-POSTing.
-	if (event.attempts >= MAX_ATTEMPTS) {
+	if (
+		event.attempts >= MAX_ATTEMPTS &&
+		event.credentialDeliveryStatus !== "delivered"
+	) {
 		await markFailed(
 			event.id,
 			"Exceeded max attempts (crash-loop reaper)",
@@ -33,6 +37,11 @@ export async function drainOnce(
 	}
 
 	try {
+		if (event.credentialDeliveryStatus === "delivered") {
+			await markProvisioned(event.id);
+			return true;
+		}
+
 		const payload = event.payload as {
 			netid: string;
 			username?: string;
@@ -49,10 +58,27 @@ export async function drainOnce(
 		const username = payload.username || payload.netid;
 
 		const body = process.env.WINDOWS_API_URL
-			? await callWindowsApi({ ...payload, username }, fetchImpl)
+			? await callWindowsApi(
+					{
+						...payload,
+						username,
+						eventId: event.id,
+						retryCredentialDelivery: true,
+					},
+					fetchImpl,
+				)
 			: stubProvision({ username });
 
+		if (!body.oneTimePassword && event.credentialDeliveryStatus === "pending") {
+			throw new Error(
+				"AD account exists, but its credential email has not been delivered. " +
+					"The provisioning API could not reissue this signup's temporary credentials. " +
+					"An administrator must verify the account and credential delivery before retrying.",
+			);
+		}
+
 		if (body.oneTimePassword) {
+			await markCredentialDelivery(event.id, "pending");
 			await sendCredentialEmail({
 				to: payload.email,
 				username: body.samAccountName,
@@ -74,6 +100,7 @@ export async function drainOnce(
 					preferredName: payload.preferredName,
 				});
 			}
+			await markCredentialDelivery(event.id, "delivered");
 		}
 
 		await markProvisioned(event.id);
@@ -185,6 +212,7 @@ async function callWindowsApi(
 		department?: string;
 		company?: string;
 		eventId: string;
+		retryCredentialDelivery: boolean;
 	},
 	fetchImpl: typeof fetch,
 ): Promise<{
@@ -215,6 +243,8 @@ async function callWindowsApi(
 	if (
 		body?.samAccountName !== payload.username ||
 		typeof body.existed !== "boolean" ||
+		(body.oneTimePassword != null &&
+			(typeof body.oneTimePassword !== "string" || !body.oneTimePassword)) ||
 		(!body.existed &&
 			(typeof body.oneTimePassword !== "string" || !body.oneTimePassword))
 	) {

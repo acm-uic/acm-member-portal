@@ -81,7 +81,7 @@ export function provisioningErrorText(error: string | null): string | null {
   if (response) {
     try {
       const body = JSON.parse(response[1]);
-      if (typeof body.error === "string")
+      if (typeof body?.error === "string")
         return body.error.replace(/\0/g, "").trim();
     } catch {
       // Older worker versions truncate JSON before removing AD's NUL padding.

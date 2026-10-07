@@ -2,7 +2,8 @@ import { sendMail } from "./smtp.ts";
 
 /**
  * Initial AD credentials. The one-time password transits portal → mailbox
- * exactly once; it is never logged or persisted (research decision).
+ * without being logged or persisted in production. A failed delivery can
+ * retry with a newly issued temporary password.
  */
 export async function sendCredentialEmail(args: {
 	to: string;

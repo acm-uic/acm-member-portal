@@ -111,6 +111,57 @@ describe("applySqlMigrations (PGlite)", () => {
 		await client.close();
 	});
 
+	it("preserves queued events when adding credential delivery progress", async () => {
+		const client = new PGlite();
+		const query = pgliteQuery(client);
+		try {
+			await applySqlMigrations(query, { useAdvisoryLock: false });
+			// Reconstruct the outbox before the delivery-state migration.
+			await query(
+				"ALTER TABLE provisioning_events DROP COLUMN credential_delivery_status",
+			);
+			await query('DELETE FROM "_migrations" WHERE name = $1', [
+				"0011_credential_delivery_status.sql",
+			]);
+			const { rows: submissions } = await query(`
+				INSERT INTO signup_submissions
+				  (schema_version_id, first_name, last_name, netid, username, email, answers, status)
+				SELECT id, 'Alex', 'Morgan', 'amorga42', 'amorga42', 'alex@example.com', '{}', 'approved'
+				FROM form_schemas WHERE form_key = 'signup' AND status = 'published'
+				LIMIT 1 RETURNING id`);
+			await query(
+				`INSERT INTO provisioning_events
+				(submission_id, payload, status, attempts, last_error)
+				VALUES ($1, '{"username":"amorga42"}', 'failed', 3, 'SMTP unavailable')`,
+				[submissions[0].id],
+			);
+
+			await applySqlMigrations(query, { useAdvisoryLock: false });
+			const { rows } =
+				await query(`SELECT status, attempts, last_error, payload,
+				credential_delivery_status FROM provisioning_events`);
+			expect(rows).toEqual([
+				{
+					status: "failed",
+					attempts: 3,
+					last_error: "SMTP unavailable",
+					payload: { username: "amorga42" },
+					credential_delivery_status: "pending",
+				},
+			]);
+			await query(
+				"UPDATE provisioning_events SET credential_delivery_status = 'delivered'",
+			);
+			await applySqlMigrations(query, { useAdvisoryLock: false });
+			const { rows: reapplied } = await query(
+				"SELECT credential_delivery_status FROM provisioning_events",
+			);
+			expect(reapplied).toEqual([{ credential_delivery_status: "delivered" }]);
+		} finally {
+			await client.close();
+		}
+	});
+
 	it("splits legacy signup display_name into first/last/preferred", async () => {
 		const client = new PGlite();
 		const query = pgliteQuery(client);
@@ -148,6 +199,10 @@ describe("applySqlMigrations (PGlite)", () => {
 		// This legacy fixture models only signup data, without member accounts.
 		await query('INSERT INTO "_migrations" ("name") VALUES ($1)', [
 			"0010_shared_username_claims.sql",
+		]);
+		// This fixture also omits the provisioning outbox.
+		await query('INSERT INTO "_migrations" ("name") VALUES ($1)', [
+			"0011_credential_delivery_status.sql",
 		]);
 
 		await applySqlMigrations(query, { useAdvisoryLock: false });
@@ -258,6 +313,7 @@ describe("applySqlMigrations (PGlite)", () => {
 			"0008_shared_netids.sql",
 			"0009_signup_username_reservations.sql",
 			"0010_shared_username_claims.sql",
+			"0011_credential_delivery_status.sql",
 		]) {
 			await query('INSERT INTO "_migrations" ("name") VALUES ($1)', [name]);
 		}

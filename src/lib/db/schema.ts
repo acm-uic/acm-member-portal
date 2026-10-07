@@ -355,6 +355,9 @@ export const provisioningEvents = pgTable(
       .notNull()
       .default("pending"),
     attempts: integer("attempts").notNull().default(0),
+    credentialDeliveryStatus: text("credential_delivery_status", {
+      enum: ["pending", "delivered"],
+    }),
     nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

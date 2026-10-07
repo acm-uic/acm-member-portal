@@ -215,5 +215,10 @@ Check out the [contributing guide](.github/CONTRIBUTING.md) and the [Code of Con
   failed account setup. The page refreshes every five seconds while approved
   signups remain, without interrupting edits or actions. Successfully provisioned
   signups leave both the queue and the staff dashboard queue count.
+- [ ] A failed credential email keeps the signup visible. Retrying the same
+  event can issue a fresh temporary password and retry delivery without storing
+  the password. Recorded delivery survives worker restarts and prevents another
+  password reset or email. Apply `0011_credential_delivery_status.sql` through
+  the normal migration runner and deploy the updated Windows API before the worker.
 - [ ] Running `kubectl create job --from=cronjob/portal-alumni-digest digest-smoke -n acm-portal`
   smoke-tests the digest with a no-op exit when there are no candidates

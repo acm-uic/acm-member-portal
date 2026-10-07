@@ -115,9 +115,70 @@ public class AccountCreationTests
     private static IAdProvisioningAccount UnexpectedCreate() => throw new Exception("Unexpected account creation");
     private static string UnexpectedPassword() => throw new Exception("Unexpected password generation");
 
+    [Fact]
+    public void CredentialDeliveryRetryReissuesOnlyThisEventsUnusedTemporaryPassword()
+    {
+        var existing = new FakeAccount
+        {
+            UserAccountControl = AdAccountCreation.UacEnabled,
+            OwnerEventId = "event-1",
+            RequiresPasswordChange = true,
+        };
+        var result = AdAccountCreation.Create("asmith", () => existing, UnexpectedCreate,
+            () => "replacement-password", "event-1", retryCredentialDelivery: true);
+        Assert.True(result.Existed);
+        Assert.Equal("replacement-password", result.OneTimePassword);
+        Assert.Equal("replacement-password", existing.Password);
+        Assert.Equal(1, existing.EnableCalls);
+        Assert.Equal(0, existing.DeleteCalls);
+    }
+
+    [Theory]
+    [InlineData("event-2", true, true)]
+    [InlineData(null, true, true)]
+    [InlineData("event-1", false, true)]
+    [InlineData("event-1", true, false)]
+    public void ReplaysCannotResetUnrelatedOrAlreadyUsedAccountsOrOrdinaryReplays(
+        string? ownerEventId, bool requiresPasswordChange, bool retryCredentialDelivery)
+    {
+        var existing = new FakeAccount
+        {
+            UserAccountControl = AdAccountCreation.UacEnabled,
+            OwnerEventId = ownerEventId,
+            RequiresPasswordChange = requiresPasswordChange,
+        };
+        var result = AdAccountCreation.Create("asmith", () => existing, UnexpectedCreate,
+            UnexpectedPassword, "event-1", retryCredentialDelivery);
+        Assert.True(result.Existed);
+        Assert.Null(result.OneTimePassword);
+        Assert.Null(existing.Password);
+        Assert.Equal(0, existing.EnableCalls);
+        Assert.Equal(0, existing.DeleteCalls);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void FailedCredentialReissueDoesNotDeleteAnExistingAccount(bool failPassword)
+    {
+        var existing = new FakeAccount
+        {
+            UserAccountControl = AdAccountCreation.UacEnabled,
+            OwnerEventId = "event-1",
+            RequiresPasswordChange = true,
+            FailPassword = failPassword,
+            FailEnable = !failPassword,
+        };
+        Assert.Throws<InvalidOperationException>(() => AdAccountCreation.Create("asmith",
+            () => existing, UnexpectedCreate, () => "replacement-password", "event-1", true));
+        Assert.Equal(0, existing.DeleteCalls);
+    }
+
     private sealed class FakeAccount : IAdProvisioningAccount
     {
         public int UserAccountControl { get; set; } = AdAccountCreation.UacCreateDisabled;
+        public string? OwnerEventId { get; init; }
+        public bool RequiresPasswordChange { get; init; }
         public bool FailPassword { get; init; }
         public bool FailEnable { get; init; }
         public bool FailDelete { get; init; }
@@ -127,6 +188,8 @@ public class AccountCreationTests
         public int DeleteCalls { get; private set; }
         public bool Deleted { get; private set; }
         public bool Disposed { get; private set; }
+
+        public bool IsOwnedBy(string eventId) => OwnerEventId == eventId;
 
         public void SetPassword(string password)
         {

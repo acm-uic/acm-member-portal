@@ -16,7 +16,8 @@ public record CreateUserRequest(
     string? PreferredName = null,
     string? Department = null,
     string? Company = null,
-    string? Username = null)
+    string? Username = null,
+    bool RetryCredentialDelivery = false)
 {
     public string AccountName =>
         string.IsNullOrWhiteSpace(Username) ? Netid : Username!.Trim();
@@ -41,8 +42,9 @@ public class ProvisioningException(string message) : Exception(message);
 /// <summary>
 /// LDAP/ADSI (System.DirectoryServices). A hosted PowerShell runspace cannot
 /// load RSAT's ActiveDirectory module: SMA looks for built-in modules under
-/// the publish folder, not $PSHOME. Idempotent on sAMAccountName: replay of
-/// a fully initialized account returns Existed=true with no password.
+/// the publish folder, not $PSHOME. Ordinary replays use sAMAccountName and
+/// return Existed=true with no password. The owning event can request fresh
+/// initial credentials while the account still requires its first password change.
 /// </summary>
 public sealed class AdProvisioningService
 {
@@ -97,7 +99,7 @@ public sealed class AdProvisioningService
                         return new DirectoryAccount(CreateDirectoryUser(ou, req, accountName,
                             AdUserPlacement.UserRdn(accountName)));
                     },
-                    GeneratePassword);
+                    GeneratePassword, req.EventId, req.RetryCredentialDelivery);
             }
             catch (Exception ex) when (ex is not ProvisioningException)
             {
@@ -176,6 +178,7 @@ public sealed class AdProvisioningService
             user.Properties["sn"].Value = req.LastName;
             user.Properties["displayName"].Value = req.DisplayName;
             user.Properties["mail"].Value = req.Email;
+            user.Properties["description"].Value = AdAccountCreation.EventMarker(req.EventId);
             if (!string.IsNullOrWhiteSpace(req.Uin)) user.Properties["employeeID"].Value = req.Uin;
             if (!string.IsNullOrWhiteSpace(req.Department)) user.Properties["department"].Value = req.Department;
             if (!string.IsNullOrWhiteSpace(req.Company)) user.Properties["company"].Value = req.Company;
@@ -193,6 +196,23 @@ public sealed class AdProvisioningService
     private sealed class DirectoryAccount(DirectoryEntry user) : IAdProvisioningAccount
     {
         public int UserAccountControl => Convert.ToInt32(user.Properties["userAccountControl"].Value);
+
+        public bool IsOwnedBy(string eventId) =>
+            user.Properties["description"].Contains(AdAccountCreation.EventMarker(eventId));
+
+        public bool RequiresPasswordChange
+        {
+            get
+            {
+                // Let LDAP compare the LargeInteger rather than relying on COM marshalling.
+                using var searcher = new DirectorySearcher(user)
+                {
+                    SearchScope = SearchScope.Base,
+                    Filter = "(&(objectClass=user)(pwdLastSet=0))",
+                };
+                return searcher.FindOne() is not null;
+            }
+        }
 
         public void SetPassword(string password) => user.Invoke("SetPassword", password);
 

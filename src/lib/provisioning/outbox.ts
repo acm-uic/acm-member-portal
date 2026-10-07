@@ -57,6 +57,7 @@ function toEvent(row: Record<string, unknown>): ProvisioningEvent {
 		payload: row.payload,
 		status: row.status,
 		attempts: row.attempts,
+		credentialDeliveryStatus: row.credential_delivery_status,
 		nextAttemptAt: row.next_attempt_at,
 		lastError: row.last_error,
 		createdAt: row.created_at,
@@ -65,10 +66,10 @@ function toEvent(row: Record<string, unknown>): ProvisioningEvent {
 }
 
 /** Atomically claim the next due event (multi-replica safe).
-    Also reclaims events stuck in 'processing' > 5 min (worker crash mid-POST);
-    reclaim increments attempts so crash-loops converge to dead-letter, and is
-    safe because the worker's POST has a 30s timeout (nothing live at 5 min)
-    and the API is idempotent on sAMAccountName. */
+    Also reclaims events stuck in 'processing' > 5 min after a worker crash;
+    reclaim increments attempts so crash-loops converge to dead-letter.
+    API requests and SMTP waits have timeouts; persisted delivery receipts
+    prevent completed delivery from being repeated after a reclaim. */
 export async function claimNext(): Promise<ProvisioningEvent | null> {
 	const { rows } = await db.execute<Record<string, unknown>>(sql`
     UPDATE provisioning_events
@@ -93,6 +94,17 @@ export async function markProvisioned(id: string): Promise<void> {
 	await db
 		.update(provisioningEvents)
 		.set({ status: "provisioned", updatedAt: new Date() })
+		.where(eq(provisioningEvents.id, id));
+}
+
+/** Save progress so a restart cannot skip failed mail or reset delivered credentials. */
+export async function markCredentialDelivery(
+	id: string,
+	status: "pending" | "delivered",
+): Promise<void> {
+	await db
+		.update(provisioningEvents)
+		.set({ credentialDeliveryStatus: status, updatedAt: new Date() })
 		.where(eq(provisioningEvents.id, id));
 }
 

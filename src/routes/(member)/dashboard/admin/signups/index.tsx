@@ -239,6 +239,7 @@ export default component$(() => {
             retry.isRunning
           }
           onClick$={async () => {
+            if (location.isNavigating || editingId.value !== null) return;
             actionError.value = null;
             try {
               await navigate(undefined, { replaceState: true, scroll: false });
@@ -391,12 +392,14 @@ export default component$(() => {
                               class="px-sm py-2xs rounded-control bg-accent text-white text-label cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                               disabled={
                                 !s.canEdit ||
+                                location.isNavigating ||
                                 editingId.value !== null ||
                                 edit.isRunning ||
                                 approve.isRunning ||
                                 deny.isRunning
                               }
                               onClick$={async () => {
+                                if (location.isNavigating) return;
                                 actionError.value = null;
                                 try {
                                   const result = await approve.submit({
@@ -417,12 +420,14 @@ export default component$(() => {
                               class="px-sm py-2xs rounded-control border border-border-visible text-text1 text-label cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                               disabled={
                                 !s.canEdit ||
+                                location.isNavigating ||
                                 editingId.value !== null ||
                                 edit.isRunning ||
                                 approve.isRunning ||
                                 deny.isRunning
                               }
                               onClick$={async () => {
+                                if (location.isNavigating) return;
                                 const reason = window.prompt(
                                   "Reason for denial (optional)",
                                 );
@@ -447,6 +452,7 @@ export default component$(() => {
                               deny.isRunning
                             }
                             onClick$={async () => {
+                              if (location.isNavigating) return;
                               actionError.value = null;
                               try {
                                 const result = await retry.submit({
@@ -496,12 +502,19 @@ export default component$(() => {
                             <button
                               type="button"
                               disabled={
+                                location.isNavigating ||
+                                editingId.value !== null ||
                                 approve.isRunning ||
                                 deny.isRunning ||
                                 edit.isRunning
                               }
                               class="px-md py-sm rounded-control border border-border-visible text-text1 text-label cursor-pointer disabled:opacity-50"
                               onClick$={() => {
+                                if (
+                                  location.isNavigating ||
+                                  editingId.value !== null
+                                )
+                                  return;
                                 editingId.value = s.id;
                                 editResult.value = null;
                                 savedId.value = null;
@@ -734,6 +747,7 @@ export default component$(() => {
               edit.isRunning
             }
             onClick$={async () => {
+              if (location.isNavigating || editingId.value !== null) return;
               try {
                 await navigate(`?page=${queue.value.page - 1}`);
               } catch {
@@ -758,6 +772,7 @@ export default component$(() => {
               edit.isRunning
             }
             onClick$={async () => {
+              if (location.isNavigating || editingId.value !== null) return;
               try {
                 await navigate(`?page=${queue.value.page + 1}`);
               } catch {
