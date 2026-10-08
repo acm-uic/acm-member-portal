@@ -30,6 +30,11 @@ export async function loadSignupQueue(
       status: provisioningEvents.status,
       lastError: provisioningEvents.lastError,
       credentialDeliveryMode: provisioningEvents.credentialDeliveryMode,
+      manualCredentialsReady: sql<boolean>`
+        ${provisioningEvents.credentialDeliveryMode} = 'admin'
+        AND ${provisioningEvents.status} = 'pending'
+        AND ${provisioningEvents.credentialRevealToken} IS NOT NULL
+      `.as("manual_credentials_ready"),
       updatedAt: provisioningEvents.updatedAt,
       nextAttemptAt: provisioningEvents.nextAttemptAt,
     })
@@ -62,6 +67,7 @@ export async function loadSignupQueue(
       provisioningStatus: latestEvent.status,
       provisioningError: latestEvent.lastError,
       credentialDeliveryMode: latestEvent.credentialDeliveryMode,
+      manualCredentialsReady: latestEvent.manualCredentialsReady,
       provisioningUpdatedAt: latestEvent.updatedAt,
       nextAttemptAt: latestEvent.nextAttemptAt,
       ...(includeRestricted ? { uin: signupSubmissions.uin } : {}),
