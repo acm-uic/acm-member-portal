@@ -5,7 +5,8 @@ Active Directory provisioning, admin configuration, and resources hub.
 
 Members can change their ACM Active Directory password from **Your profile**.
 The form requires the current password and reports AD's password policy
-rejections. Production password changes require an HTTPS Windows API connection.
+rejections. Password changes support HTTP and HTTPS Windows API connections,
+including in production. Use HTTP only on a trusted private network.
 See [Windows API configuration](windows-api/README.md) for permissions and rollout checks.
 
 ## Architecture (one screen)

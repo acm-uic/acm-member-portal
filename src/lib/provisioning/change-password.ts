@@ -37,15 +37,11 @@ export async function changeAdPassword(
       error: "Password changes are unavailable. Contact ACM support.",
     };
   }
-  if (
-    !["http:", "https:"].includes(url.protocol) ||
-    (process.env.NODE_ENV === "production" && url.protocol !== "https:")
-  ) {
+  if (!["http:", "https:"].includes(url.protocol)) {
     return {
       ok: false,
       status: 503,
-      error:
-        "Password changes require a secure directory connection. Contact ACM support.",
+      error: "Password changes are unavailable. Contact ACM support.",
     };
   }
   try {
