@@ -127,10 +127,13 @@ age rule. The portal does not invent specific requirements. Passwords are not
 logged, stored, queued, or echoed in responses. An expired or temporary password
 is passed directly to `ChangePassword`, without a separate login bind.
 
-Production password changes require `WINDOWS_API_URL` to use HTTPS with a
-certificate trusted by the portal. Configure TLS on Kestrel or on a reverse proxy
-on the Windows host. Do not enable request body logging on either service or the
-proxy. The AD account must allow password changes and the service identity needs
+Password changes accept HTTP and HTTPS `WINDOWS_API_URL` values, including in
+production. For the default Windows API listener, use
+`http://<windows-host>:2433` on a trusted private network. HTTP sends passwords and
+the bearer token without transport encryption. For HTTPS, use a certificate
+trusted by the portal and configure TLS on Kestrel or on a reverse proxy on the
+Windows host. Do not enable request body logging on either service or the proxy.
+The AD account must allow password changes and the service identity needs
 the Change Password extended right on managed users. Existing Reset Password
 delegation alone is not sufficient. AD's normal Everyone/SELF Change Password
 ACEs commonly supply this right; verify the effective ACL in your environment.

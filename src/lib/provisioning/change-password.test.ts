@@ -113,16 +113,32 @@ describe("changeAdPassword", () => {
     },
   );
 
-  it("refuses to transmit production passwords over HTTP", async () => {
-    vi.stubEnv("NODE_ENV", "production");
-    vi.stubEnv("WINDOWS_API_URL", "http://directory.example");
-    const send = vi.fn<typeof fetch>();
-    expect(await changeAdPassword("member", "old", "new", send)).toMatchObject({
-      ok: false,
-      status: 503,
-    });
-    expect(send).not.toHaveBeenCalled();
-  });
+  it.each(["http", "https"])(
+    "allows %s Windows API connections in production",
+    async (protocol) => {
+      vi.stubEnv("NODE_ENV", "production");
+      vi.stubEnv("WINDOWS_API_URL", `${protocol}://directory.example:2433`);
+      const send = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(Response.json({ ok: true }));
+      expect(await changeAdPassword("member", "old", "new", send)).toEqual({
+        ok: true,
+      });
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(send).toHaveBeenCalledWith(
+        new URL(`${protocol}://directory.example:2433/users/member/password`),
+        expect.objectContaining({
+          method: "POST",
+          redirect: "error",
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer test-token",
+          },
+          body: JSON.stringify({ currentPassword: "old", newPassword: "new" }),
+        }),
+      );
+    },
+  );
 
   it.each(["not a URL", "ftp://directory.example"])(
     "reports invalid configuration %s as unavailable before sending passwords",
@@ -134,6 +150,7 @@ describe("changeAdPassword", () => {
       ).toMatchObject({
         ok: false,
         status: 503,
+        error: "Password changes are unavailable. Contact ACM support.",
       });
       expect(send).not.toHaveBeenCalled();
     },
