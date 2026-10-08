@@ -134,6 +134,9 @@ describe("signup queue through AD provisioning", () => {
       .fn<typeof fetch>()
       .mockResolvedValue(credentialsResponse(row.username));
     expect(await drainOnce(fetchImpl)).toBe(false);
+    expect(await queue.loadSignupQueue(false)).toMatchObject([
+      { id: row.id, manualCredentialsReady: false },
+    ]);
     const result = await manual.revealManualCredentials(id, actorId, fetchImpl);
     expect(result).toMatchObject({
       username: row.username,
@@ -148,6 +151,7 @@ describe("signup queue through AD provisioning", () => {
         id: row.id,
         credentialDeliveryMode: "admin",
         provisioningStatus: "pending",
+        manualCredentialsReady: true,
       },
     ]);
     const events = await db.select().from(tables.provisioningEvents);
@@ -155,6 +159,9 @@ describe("signup queue through AD provisioning", () => {
     expect(
       JSON.stringify([events, audit, await queue.loadSignupQueue(false)]),
     ).not.toContain("manual-secret");
+    expect(JSON.stringify(await queue.loadSignupQueue(false))).not.toContain(
+      result.token,
+    );
     expect(await drainOnce(fetchImpl)).toBe(false);
     expect(
       await manual.confirmManualDelivery(id, crypto.randomUUID(), actorId),
@@ -170,6 +177,40 @@ describe("signup queue through AD provisioning", () => {
       manual.revealManualCredentials(id, actorId, fetchImpl),
     ).rejects.toMatchObject({ status: 409 });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the displayed manual password for login before and after confirmation", async () => {
+    const { row, id } = await manualEvent();
+    vi.stubEnv("WINDOWS_API_URL", "");
+    try {
+      const credentials = await manual.revealManualCredentials(id, actorId);
+      const { verifyPassword } = await import("better-auth/crypto");
+      const login = async () => {
+        const [account] = await db
+          .select({ password: tables.account.password })
+          .from(tables.account)
+          .innerJoin(tables.user, eq(tables.user.id, tables.account.userId))
+          .where(eq(tables.user.email, row.email));
+        expect(account?.password).toBeTruthy();
+        expect(
+          await verifyPassword({
+            hash: account!.password!,
+            password: credentials.oneTimePassword,
+          }),
+        ).toBe(true);
+        return account!.password;
+      };
+      const originalHash = await login();
+      expect(await drainOnce()).toBe(false);
+      expect(
+        await manual.confirmManualDelivery(id, credentials.token, actorId),
+      ).toBe(true);
+      expect(await login()).toBe(originalHash);
+      expect(await queue.loadSignupQueue(false)).toEqual([]);
+      expect(sendCredentialEmail).not.toHaveBeenCalled();
+    } finally {
+      vi.stubEnv("WINDOWS_API_URL", "https://directory.example");
+    }
   });
 
   it("recovers a lost manual response with fresh credentials and rejects the old acknowledgement", async () => {

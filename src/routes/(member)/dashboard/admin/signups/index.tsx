@@ -208,11 +208,15 @@ export default component$(() => {
   const manualBusy = useSignal(false);
   const manualCredentials = useSignal<NoSerialize<ManualCredentials>>();
   const passwordCopied = useSignal(false);
+  const passwordVisible = useSignal(true);
+  const actionSuccess = useSignal<string | null>(null);
   const reveal = $(async (id: string) => {
     manualBusy.value = true;
     actionError.value = null;
+    actionSuccess.value = null;
     manualCredentials.value = undefined;
     passwordCopied.value = false;
+    passwordVisible.value = true;
     try {
       const result = await requestCredentials({ action: "reveal", id });
       manualCredentials.value = noSerialize({
@@ -245,8 +249,6 @@ export default component$(() => {
         manualBusy.value ||
         manualCredentials.value ||
         refreshing ||
-        manualBusy.value ||
-        !!manualCredentials.value ||
         location.isNavigating ||
         editingId.value ||
         approve.isRunning ||
@@ -315,6 +317,11 @@ export default component$(() => {
       {actionError.value && (
         <p role="alert" class="text-error text-body-sm m-0">
           {actionError.value}
+        </p>
+      )}
+      {actionSuccess.value && (
+        <p role="status" class="text-text2 text-body-sm m-0">
+          {actionSuccess.value}
         </p>
       )}
 
@@ -395,17 +402,20 @@ export default component$(() => {
                       >
                         {s.status === "pending"
                           ? "Awaiting review"
-                          : s.provisioningStatus === "processing"
-                            ? "Creating AD account"
-                            : s.provisioningStatus === "failed"
-                              ? "Account setup failed"
-                              : s.provisioningStatus === "dead_lettered"
-                                ? "Account setup stopped"
-                                : !s.provisioningId
-                                  ? "Account setup was not queued"
-                                  : s.credentialDeliveryMode === "admin"
-                                    ? "Awaiting manual credential delivery"
-                                    : "Waiting to create AD account"}
+                          : manualCredentials.value?.id === s.provisioningId ||
+                              s.manualCredentialsReady
+                            ? "AD account ready · awaiting password confirmation"
+                            : s.provisioningStatus === "processing"
+                              ? "Creating AD account"
+                              : s.provisioningStatus === "failed"
+                                ? "Account setup failed"
+                                : s.provisioningStatus === "dead_lettered"
+                                  ? "Account setup stopped"
+                                  : !s.provisioningId
+                                    ? "Account setup was not queued"
+                                    : s.credentialDeliveryMode === "admin"
+                                      ? "Awaiting manual credential delivery"
+                                      : "Waiting to create AD account"}
                       </span>
                       {s.credentialDeliveryMode !== "admin" &&
                         s.provisioningStatus === "failed" &&
@@ -494,6 +504,7 @@ export default component$(() => {
                               onClick$={async () => {
                                 if (location.isNavigating) return;
                                 actionError.value = null;
+                                actionSuccess.value = null;
                                 try {
                                   manualBusy.value = true;
                                   const result = await approve.submit({
@@ -544,29 +555,40 @@ export default component$(() => {
                           </>
                         )}
                         {s.canReveal && s.provisioningId && (
-                          <button
-                            type="button"
-                            class="px-sm py-2xs rounded-control bg-accent text-white text-label cursor-pointer disabled:opacity-50"
-                            disabled={
-                              manualBusy.value ||
-                              !!manualCredentials.value ||
-                              location.isNavigating ||
-                              editingId.value !== null ||
-                              edit.isRunning ||
-                              approve.isRunning ||
-                              deny.isRunning ||
-                              retry.isRunning ||
-                              (s.provisioningStatus === "processing" &&
-                                Date.now() -
-                                  new Date(s.provisioningUpdatedAt!).getTime() <
-                                  300_000)
-                            }
-                            onClick$={async () => {
-                              await reveal(s.provisioningId!);
-                            }}
-                          >
-                            Show temporary password
-                          </button>
+                          <div class="grid gap-2xs">
+                            <button
+                              type="button"
+                              class="px-sm py-2xs rounded-control bg-accent text-white text-label cursor-pointer disabled:opacity-50"
+                              disabled={
+                                manualBusy.value ||
+                                !!manualCredentials.value ||
+                                location.isNavigating ||
+                                editingId.value !== null ||
+                                edit.isRunning ||
+                                approve.isRunning ||
+                                deny.isRunning ||
+                                retry.isRunning ||
+                                (s.provisioningStatus === "processing" &&
+                                  Date.now() -
+                                    new Date(
+                                      s.provisioningUpdatedAt!,
+                                    ).getTime() <
+                                    300_000)
+                              }
+                              onClick$={async () => {
+                                await reveal(s.provisioningId!);
+                              }}
+                            >
+                              {s.manualCredentialsReady
+                                ? "Issue new temporary password"
+                                : "Show temporary password"}
+                            </button>
+                            {s.manualCredentialsReady && (
+                              <span class="text-caption text-text3">
+                                Replaces the previously issued password.
+                              </span>
+                            )}
+                          </div>
                         )}
                         {s.canRetry && s.provisioningId && (
                           <button
@@ -617,8 +639,10 @@ export default component$(() => {
                             </span>
                           </p>
                           <p class="text-body-sm text-text2 m-0">
-                            Copy these credentials to distribute to the
-                            applicant. They must change their password at first
+                            The AD account is ready with this temporary
+                            password. Copy these credentials to distribute to
+                            the applicant, then confirm below to finish
+                            approval. They must change their password at first
                             sign-in. No email will be sent.
                           </p>
                           <p class="text-body-sm text-text1 m-0">
@@ -630,7 +654,7 @@ export default component$(() => {
                           <label class="grid gap-2xs text-caption text-text3">
                             Temporary password
                             <input
-                              type="text"
+                              type={passwordVisible.value ? "text" : "password"}
                               readOnly
                               autoComplete="off"
                               spellcheck={false}
@@ -677,10 +701,17 @@ export default component$(() => {
                                     token: credentials.token,
                                   });
                                   manualCredentials.value = undefined;
-                                  await navigate(undefined, {
-                                    replaceState: true,
-                                    scroll: false,
-                                  });
+                                  passwordCopied.value = false;
+                                  actionSuccess.value = `Approval complete for ${credentials.username}. The copied password is ready to use.`;
+                                  try {
+                                    await navigate(undefined, {
+                                      replaceState: true,
+                                      scroll: false,
+                                    });
+                                  } catch {
+                                    actionError.value =
+                                      "Approval was completed, but the queue could not refresh. Refresh status to update the list.";
+                                  }
                                 } catch (error) {
                                   actionError.value =
                                     error instanceof Error
@@ -692,7 +723,7 @@ export default component$(() => {
                               }}
                             >
                               {manualBusy.value
-                                ? "Saving..."
+                                ? "Finishing approval..."
                                 : "I've copied the password"}
                             </button>
                             <button
@@ -700,17 +731,20 @@ export default component$(() => {
                               class="px-sm py-2xs rounded-control border border-border-visible text-text1 text-label cursor-pointer"
                               disabled={manualBusy.value}
                               onClick$={() => {
-                                manualCredentials.value = undefined;
+                                passwordVisible.value = !passwordVisible.value;
                               }}
                             >
-                              Hide password
+                              {passwordVisible.value
+                                ? "Hide password"
+                                : "Show password"}
                             </button>
                           </div>
                           <p class="text-caption text-text3 m-0">
                             This signup stays queued until you confirm you have
-                            copied the password. If you hide it or reload before
-                            confirming, showing it again generates a new
-                            temporary password.
+                            copied the password. Hiding and showing it here
+                            keeps the same password. Reloading before confirming
+                            and requesting credentials again generates a new
+                            password.
                           </p>
                         </section>
                       </td>
