@@ -721,7 +721,6 @@ export default component$(() => {
                               type="button"
                               class="px-sm py-2xs rounded-control border border-border-visible text-text1 text-label cursor-pointer"
                               disabled={manualBusy.value}
-                              aria-pressed={passwordVisible.value}
                               onClick$={() => {
                                 passwordVisible.value = !passwordVisible.value;
                               }}
