@@ -2,7 +2,7 @@ import {
 	type PlatformNode,
 	createQwikCity,
 } from "@builder.io/qwik-city/middleware/node";
-import Fastify from "fastify";
+import Fastify, { LogController } from "fastify";
 import qwikCityPlan from "@qwik-city-plan";
 import render from "./entry.ssr";
 
@@ -15,7 +15,14 @@ const { router, notFound, staticFile } = createQwikCity({
 	qwikCityPlan,
 });
 
-const app = Fastify({ logger: true, trustProxy: true });
+const app = Fastify({
+	logger: true,
+	trustProxy: true,
+	logController: new LogController({
+		disableRequestLogging: (request) =>
+			request.url.split("?", 1)[0] === "/healthz",
+	}),
+});
 
 // Qwik reads request.raw itself. Fastify's parsers would consume the body first,
 // leaving Better Auth and Qwik form actions with an empty request stream.
