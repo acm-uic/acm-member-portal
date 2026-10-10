@@ -15,6 +15,11 @@ updates:
 
   - package-ecosystem: "bun"
     directory: "/"
+    groups:
+      better-auth:
+        patterns:
+          - "better-auth"
+          - "@better-auth/*"
     schedule:
       interval: "weekly"
       day: "saturday"
