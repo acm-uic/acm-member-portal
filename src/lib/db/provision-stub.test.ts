@@ -22,6 +22,7 @@ describe("provisioning stub drain", () => {
 		process.env.NODE_ENV = "development";
 		process.env.BETTER_AUTH_SECRET = "test-secret-at-least-32-characters!!";
 		process.env.BETTER_AUTH_URL = "http://localhost:5173";
+		vi.stubEnv("ORIGIN", "http://localhost:5173");
 		// Reset module singletons between tests
 		vi.resetModules();
 		delete (globalThis as { __portalDb?: unknown }).__portalDb;
@@ -36,13 +37,16 @@ describe("provisioning stub drain", () => {
 	});
 
 	afterEach(async () => {
-		const client = (globalThis as { __pgliteClient?: { close: () => Promise<void> } })
-			.__pgliteClient;
+		vi.unstubAllEnvs();
+		const client = (
+			globalThis as { __pgliteClient?: { close: () => Promise<void> } }
+		).__pgliteClient;
 		if (client) {
 			await client.close().catch(() => {});
 		}
-		const timer = (globalThis as { __portalDrainTimer?: ReturnType<typeof setInterval> })
-			.__portalDrainTimer;
+		const timer = (
+			globalThis as { __portalDrainTimer?: ReturnType<typeof setInterval> }
+		).__portalDrainTimer;
 		if (timer) clearInterval(timer);
 
 		rmSync(dataDir, { recursive: true, force: true });
@@ -121,6 +125,15 @@ describe("provisioning stub drain", () => {
 		expect(files.length).toBeGreaterThanOrEqual(1);
 		const body = readFileSync(join(mailDir, files[0]!), "utf8");
 		expect(body).toContain("tuser@example.com");
-		expect(body).toContain("One-time password:");
+		expect(body).toContain("Temporary password:");
+		expect(body).toContain(
+			"1. Activate your account at http://localhost:5173/activate/",
+		);
+		expect(body).toContain("choose a new password");
+		expect(body).toContain("2. Allow up to 30 minutes");
+		expect(body).toContain(
+			'3. Visit http://localhost:5173/login/ and choose "Sign in with Microsoft" using your ACM email address and new password.',
+		);
+		expect(body.indexOf("/activate/")).toBeLessThan(body.indexOf("/login/"));
 	});
 });

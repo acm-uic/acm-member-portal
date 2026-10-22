@@ -30,6 +30,7 @@ export type TableRow = { cells: string[] };
 export type PersonalMetrics = {
 	membership: string;
 	provisioning: {
+		label: string;
 		note: string;
 		tone: "success" | "warning" | "error";
 	};
@@ -86,22 +87,29 @@ function provisioningNote(
 	status: string | undefined,
 ): PersonalMetrics["provisioning"] {
 	if (status === "provisioned") {
-		return { note: "Account provisioned", tone: "success" };
+		return {
+			label: "Provisioned",
+			note: "AD account created",
+			tone: "success",
+		};
 	}
 	if (status === "failed") {
 		return {
+			label: "Failed",
 			note: "Provisioning failed — contact an officer",
 			tone: "error",
 		};
 	}
-	return { note: "Provisioning pending", tone: "warning" };
+	return { label: "Pending", note: "Provisioning pending", tone: "warning" };
 }
 
-export function personalMetricsFromProfile(profile: {
-	status?: string;
-	adProvisioningStatus?: string;
-	answers?: unknown;
-} | null): PersonalMetrics {
+export function personalMetricsFromProfile(
+	profile: {
+		status?: string;
+		adProvisioningStatus?: string;
+		answers?: unknown;
+	} | null,
+): PersonalMetrics {
 	const answers = (profile?.answers ?? {}) as Record<string, unknown>;
 	const sigInterest = Array.isArray(answers.sig_interest)
 		? answers.sig_interest.length

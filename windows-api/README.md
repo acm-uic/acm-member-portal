@@ -7,16 +7,54 @@ their ACM passwords from their profile.
 
 ## Endpoints
 
-| Method | Path | Auth | Purpose |
-| --- | --- | --- | --- |
-| GET | `/healthz` | none | liveness |
-| POST | `/users` | Bearer | create AD user (idempotent on sAMAccountName) |
-| PATCH | `/users/{sam}` | Bearer | update AD user; `{sam}` is the current sAMAccountName |
-| GET | `/users/{sam}` | Bearer | existence check |
-| POST | `/users/{sam}/password` | Bearer | change password, verifying the current password |
+| Method | Path                    | Auth   | Purpose                                               |
+| ------ | ----------------------- | ------ | ----------------------------------------------------- |
+| GET    | `/healthz`              | none   | liveness                                              |
+| POST   | `/users`                | Bearer | create AD user (idempotent on sAMAccountName)         |
+| PATCH  | `/users/{sam}`          | Bearer | update AD user; `{sam}` is the current sAMAccountName |
+| GET    | `/users/{sam}`          | Bearer | existence check                                       |
+| POST   | `/users/{sam}/password` | Bearer | change password, verifying the current password       |
+| POST   | `/users/{sam}/activate` | Bearer | initial password change for the owning signup event   |
 
 JSON is camelCase. Required create fields: `username` (or `netid`), `firstName`,
 `lastName`, `displayName`, `email`, `eventId`. Missing any of those is `400`.
+
+### Initial account activation
+
+Deploy this Windows API **before** deploying the portal activation page. The
+portal needs migration `0015_account_activation.sql` and its configured
+`WINDOWS_API_URL` / `WINDOWS_API_TOKEN`; an older Windows API does not support
+activation. Keep the Windows API private to the portal and worker. End users
+submit credentials only to the same-origin portal `/api/activate/` endpoint.
+
+`POST /users/{sam}/activate` accepts `{ eventId, currentPassword, newPassword }`.
+It requires an enabled, fully provisioned AD account, the exact matching
+`ACM provisioning event: <eventId>` description marker, and `pwdLastSet = 0`.
+Under the existing per-account gate it calls ADSI `ChangePassword`, which
+verifies the temporary password and enforces AD policy. It never calls
+administrative `SetPassword`. Accounts already activated or created by another
+event cannot be changed through this operation. The regular signed-in
+password-change endpoint retains its current behavior.
+
+Only a confirmed change returns `{ ok: true }`. Ineligible accounts and AD
+credential/policy rejections receive the same generic HTTP 400; unexpected
+directory failures return 502 with an uncertain outcome. Passwords and directory
+exception details are not logged or returned. Neither portal nor API retries an
+uncertain password change. After uncertainty, allow synchronization and try the
+new password at Microsoft sign-in; ask support to investigate rather than
+reissuing initial credentials.
+
+The portal independently verifies approved signup, completed provisioning and
+delivered credentials, then records only a successful activation timestamp.
+It applies database-backed username and connection-address budgets before AD
+calls, so portal replicas share limits. Those records contain hashed limiter
+keys and counts, never passwords. The API additionally shares its per-account
+password-change rate limiter with activation.
+
+No activation response proves Entra synchronization or successful Microsoft
+sign-in. The applicant must allow synchronization after changing the initial
+password. Real AD behavior must be verified on a Windows deployment; the
+automated tests use fake AD accounts and mocked HTTP transport.
 
 `POST /users` body:
 
@@ -143,13 +181,110 @@ the password unchanged; a policy-rejected password displays AD's error; a valid
 change permits sign-in with the new password and rejects the old one; an initial
 temporary password can be changed; and repeated attempts return `429`.
 
+## Automatic Entra Connect synchronization
+
+The API can request synchronization on the **same Windows host as the active
+Entra Connect installation**. This integration is disabled by default; it does
+not install Connect, change the scheduler, synchronize temporary passwords, or
+prove Microsoft sign-in readiness.
+
+After a successful `POST /users` (including an idempotent replay), it queues
+`Start-ADSyncSyncCycle -PolicyType Delta -InteractiveMode:$false`. After a
+successful `POST /users/{sam}/activate` or `POST /users/{sam}/password`, it queues
+`Invoke-ADSyncCSObjectPasswordHashSync` for the account's AD distinguished name.
+Rejections and missing accounts do not queue password synchronization.
+Provisioning does not queue a temporary password hash: `pwdLastSet = 0` remains
+in effect until activation, with the existing tenant settings.
+
+The queue stores only a job kind, account DN for password jobs, attempt metadata,
+and IDs. It never receives passwords or bearer tokens. It persists atomic JSON
+snapshots with a single-process file lease, combines directory requests and
+pending password requests for the same DN, and retries failures with a 15-second
+to 5-minute backoff. Requests added while a sync runs are retained. A busy,
+disabled, suspended, or staging directory scheduler is not overridden. Password
+sync is independent of the object scheduler's enabled/busy state, but is also
+blocked on a suspended or staging server. A new account not yet present in the
+connector space may require a later attempt after directory synchronization.
+
+PowerShell runs in a separate, hidden Windows PowerShell 5.1 process using the
+service identity. It executes a fixed published script, accepts JSON data on
+stdin, and passes the DN as a literal cmdlet parameter. No command strings are
+built from account data. No hosted PowerShell SDK or remoting is used. Each
+invocation has a configurable timeout; PowerShell output is discarded and only
+fixed progress/failure messages are logged.
+
+### Enable on the Connect host
+
+1. Publish/deploy the API, including the `EntraSync` subdirectory. Ensure the
+   host's execution policy permits these administrator-reviewed scripts (sign
+   them if required). The runner does not bypass execution policy.
+2. Create `C:\ProgramData\ACM\EntraSync\settings.json` from
+   `EntraSync\settings.example.json`. Set `ConnectorName` to `acmuic.org` and
+   `UsersOu` to `OU=ACMUsers,DC=acmuic,DC=org` for this installation. Password DNs
+   outside that managed OU are rejected. Only administrators should be able to
+   write the settings and scripts; the service identity needs read/execute access.
+3. Pre-create `C:\ProgramData\ACM\EntraSyncQueue` and grant the API service
+   identity Modify access, with access otherwise restricted to Administrators
+   and SYSTEM. Keep the directory outside `C:\srv\acm-provisioning`, because
+   deployment replaces that installation directory. Do not share one queue
+   directory between service instances or delete pending jobs during deployment.
+4. Verify `Import-Module ADSync`, `Get-ADSyncScheduler`, and both sync commands
+   under the **actual API service identity**, not just your administrator shell.
+   The existing AD OU permissions alone do not grant Connect engine access.
+   Configure the required Connect permissions with your identity administrator;
+   membership in `ADSyncAdmins` grants broad sync-engine management access and
+   should not be added casually. Domain Admin or LocalSystem is not required by
+   this application. No new Graph credentials, SSPR, or password writeback are
+   used.
+5. Set the service environment/configuration and restart it:
+
+   ```text
+   EntraSync__Enabled=true
+   EntraSync__QueueDirectory=C:\ProgramData\ACM\EntraSyncQueue
+   EntraSync__TimeoutSeconds=120
+   ```
+
+   A relative/unwritable queue path, corrupt queue, or concurrent owner prevents
+   enabled startup. The timeout must be between 10 and 600 seconds. Missing
+   scripts, denied PowerShell execution, ADSync failures, and insufficient
+   permissions cause fixed warning messages and persistent retries.
+
+Look for `Entra synchronization worker enabled`, sync-request accepted messages,
+or retry/persistence errors in service logging. An accepted request is not a
+completed export or evidence that the password is ready for Microsoft sign-in.
+Use the Connect diagnostics and a real test sign-in to verify the result.
+The unchanged `/healthz` response checks API liveness, not sync health.
+
+The queue is written immediately **after** AD reports success. A process crash
+in that small interval, or a later disk-write failure, can miss the extra trigger;
+normal scheduled directory/password synchronization remains the fallback. Such
+failures never turn a completed password change or creation into an HTTP error
+and never replay AD operations. Already-persisted jobs resume on service restart.
+Disabling the feature pauses the queue without deleting it.
+
+Run the .NET queue/notification/worker regressions and the Windows PowerShell
+checks without contacting AD or Connect:
+
+```powershell
+dotnet test windows-api.Tests/AcmProvisioning.Tests.csproj
+powershell.exe -NoProfile -File windows-api/EntraSync/test-sync.ps1
+```
+
+The PowerShell checks mock all ADSync calls and exercise the real stdin wrapper
+in an isolated subprocess. Live Connect permissions, sync completion, and
+Microsoft sign-in still require deployment-time validation.
+
+Microsoft references: [ADSync commands](https://learn.microsoft.com/en-us/entra/identity/hybrid/connect/reference-connect-adsync),
+[directory scheduler](https://learn.microsoft.com/en-us/entra/identity/hybrid/connect/how-to-connect-sync-feature-scheduler),
+and [password synchronization](https://learn.microsoft.com/en-us/entra/identity/hybrid/connect/how-to-connect-password-hash-synchronization).
+
 ## Host requirements
 
 - Domain-joined Windows Server 2019+ (LDAP/ADSI, no RSAT PowerShell module)
 - .NET 10 runtime (`dotnet --list-runtimes` → Microsoft.AspNetCore.App 10.x)
 - Service identity `ACMUIC\acmmemberportal` (see [Service account](#service-account)). Do
   not run as LocalSystem or Domain Admin. `New-ADUser` in your own PowerShell
-  session only proves *your* token can create users.
+  session only proves _your_ token can create users.
 - Firewall: allow inbound 2433 (or 443 with a cert) from the k8s cluster egress only
 - LDAP (TCP 389) from this host to the DCs. The PowerShell AD module uses ADWS
   (9389); this process uses LDAP.
@@ -167,10 +302,10 @@ members OU it manages.
    `Provisioning__UsersOu` says otherwise):
    - ADUC → the OU → Delegate Control → `ACMUIC\acmmemberportal`
    - canned task **Create, delete, and manage user accounts**
-   That grants create/delete users, reset password, and write the attributes this
-   API sets (`givenName`, `sn`, `displayName`, `mail`, `description`,
-   `employeeID`, `department`, `company`, `sAMAccountName`, `userPrincipalName`, `userAccountControl`,
-   `pwdLastSet`).
+     That grants create/delete users, reset password, and write the attributes this
+     API sets (`givenName`, `sn`, `displayName`, `mail`, `description`,
+     `employeeID`, `department`, `company`, `sAMAccountName`, `userPrincipalName`, `userAccountControl`,
+     `pwdLastSet`).
    - Add a custom delegation on the base OU and descendant OUs for **Create
      Organizational Unit objects**. The API needs this to create years under
      the base OU and months under each year OU.
@@ -183,11 +318,12 @@ members OU it manages.
    dsacls "OU=ACMUsers,DC=acmuic,DC=org"
    # look for ACMUIC\acmmemberportal (create-child user, reset password, write)
    ```
+
 4. On the Windows host, grant **Log on as a service** to `ACMUIC\acmmemberportal`
    (Local Security Policy → User Rights Assignment). `sc.exe create` / `config`
    with `obj=` often adds this; if start fails with 1069 it is missing.
 5. NTFS: the account needs Read & execute on `C:\srv\acm-provisioning`.
-6. Prove it *as that user*, not as you:
+6. Prove it _as that user_, not as you:
 
    ```powershell
    runas /user:ACMUIC\acmmemberportal powershell

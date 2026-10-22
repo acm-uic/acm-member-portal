@@ -11,7 +11,7 @@ export const STATUS_LABELS: Record<ProvisioningStatus, string> = {
   processing: "Processing",
   failed: "Failed",
   dead_lettered: "Retries stopped",
-  provisioned: "Completed",
+  provisioned: "AD setup complete",
 };
 
 /** Fixed zone makes server rendering and browser navigation agree. */

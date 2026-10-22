@@ -34,6 +34,7 @@ public record UpdateUserRequest(
 
 public record CreateUserResponse(string SamAccountName, bool Existed, string? OneTimePassword);
 public record ChangePasswordRequest(string CurrentPassword, string NewPassword);
+public record ActivateAccountRequest(string EventId, string CurrentPassword, string NewPassword);
 
 public class PasswordChangeException(string message) : Exception(message);
 
@@ -52,9 +53,11 @@ public sealed class AdProvisioningService
     private readonly string _usersOu;
     private readonly string? _domainController;
     private readonly TimeZoneInfo _timeZone;
+    private readonly AdSyncNotifications _sync;
 
-    public AdProvisioningService(IConfiguration config)
+    public AdProvisioningService(IConfiguration config, AdSyncNotifications sync)
     {
+        _sync = sync;
         _upnSuffix = config["Provisioning:UpnSuffix"] ?? throw new InvalidOperationException("Provisioning:UpnSuffix is required");
         _usersOu = config["Provisioning:UsersOu"] ?? throw new InvalidOperationException("Provisioning:UsersOu is required");
         _domainController = config["Provisioning:DomainController"];
@@ -88,7 +91,7 @@ public sealed class AdProvisioningService
             var accountName = req.AccountName;
             try
             {
-                return AdAccountCreation.Create(accountName,
+                return _sync.Provision(() => AdAccountCreation.Create(accountName,
                     () =>
                     {
                         var existing = FindUser(accountName);
@@ -100,7 +103,7 @@ public sealed class AdProvisioningService
                         return new DirectoryAccount(CreateDirectoryUser(ou, req, accountName,
                             AdUserPlacement.UserRdn(accountName)));
                     },
-                    GeneratePassword, req.EventId, req.RetryCredentialDelivery);
+                    GeneratePassword, req.EventId, req.RetryCredentialDelivery));
             }
             catch (Exception ex) when (ex is not ProvisioningException)
             {
@@ -151,12 +154,34 @@ public sealed class AdProvisioningService
                 // ChangePassword verifies the old password and enforces AD policy.
                 // Do not replace this with SetPassword, which is an administrative reset.
                 // No separate login bind: temporary/expired passwords can still be changed.
-                user.Invoke("ChangePassword", req.CurrentPassword, req.NewPassword);
-                return true;
+                var dn = user.Properties["distinguishedName"].Value?.ToString();
+                return _sync.ChangePassword(dn, () =>
+                {
+                    user.Invoke("ChangePassword", req.CurrentPassword, req.NewPassword);
+                    return true;
+                });
             }
             catch (Exception ex) when (AdErrors.IsPasswordRejection(ex))
             {
                 throw new PasswordChangeException(AdErrors.PasswordChangeMessage(ex, req.CurrentPassword, req.NewPassword));
+            }
+        }, cancellationToken);
+
+    public Task<bool> ActivateAccountAsync(
+        string samAccountName, ActivateAccountRequest req, CancellationToken cancellationToken = default) =>
+        AdAccountCreationGate.RunAsync(samAccountName, () =>
+        {
+            using var user = FindUser(samAccountName);
+            if (user is null) return false;
+            try
+            {
+                var dn = user.Properties["distinguishedName"].Value?.ToString();
+                return _sync.ChangePassword(dn, () => AdAccountActivation.Activate(new DirectoryAccount(user), req));
+            }
+            catch (Exception ex) when (AdErrors.IsPasswordRejection(ex))
+            {
+                // This unauthenticated caller must not learn account/policy details.
+                throw new PasswordChangeException("Activation was rejected.");
             }
         }, cancellationToken);
 
@@ -195,7 +220,7 @@ public sealed class AdProvisioningService
         }
     }
 
-    private sealed class DirectoryAccount(DirectoryEntry user) : IAdProvisioningAccount
+    private sealed class DirectoryAccount(DirectoryEntry user) : IAdProvisioningAccount, IAdActivationAccount
     {
         public int UserAccountControl => Convert.ToInt32(user.Properties["userAccountControl"].Value);
 
@@ -217,6 +242,8 @@ public sealed class AdProvisioningService
         }
 
         public void SetPassword(string password) => user.Invoke("SetPassword", password);
+        public void ChangePassword(string currentPassword, string newPassword) =>
+            user.Invoke("ChangePassword", currentPassword, newPassword);
 
         public void Enable()
         {

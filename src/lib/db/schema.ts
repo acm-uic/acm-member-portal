@@ -391,6 +391,18 @@ export const provisioningEvents = pgTable(
   ],
 );
 
+/** Receipt of a confirmed initial AD password change; cloud sync is independent. */
+export const accountActivations = pgTable("account_activations", {
+  eventId: uuid("event_id").primaryKey().references(() => provisioningEvents.id, { onDelete: "cascade" }),
+  activatedAt: timestamp("activated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const accountActivationLimits = pgTable("account_activation_limits", {
+  key: text("key").primaryKey(),
+  attempts: integer("attempts").notNull(),
+  windowStart: timestamp("window_start", { withTimezone: true }).notNull(),
+}, (t) => [index("account_activation_limits_window_idx").on(t.windowStart)]);
+
 export const provisioningLogs = pgTable(
   "provisioning_logs",
   {
@@ -446,4 +458,6 @@ export const schema = {
   auditEvents,
   provisioningEvents,
   provisioningLogs,
+  accountActivations,
+  accountActivationLimits,
 };

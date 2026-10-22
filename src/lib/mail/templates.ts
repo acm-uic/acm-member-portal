@@ -1,4 +1,5 @@
 import { sendMail } from "./smtp.ts";
+import { credentialDeliveryInstructions } from "../credential-instructions.ts";
 
 /**
  * Initial AD credentials. The one-time password transits portal → mailbox
@@ -12,17 +13,17 @@ export async function sendCredentialEmail(args: {
 }): Promise<void> {
 	await sendMail({
 		to: args.to,
-		subject: "Your ACM@UIC account is ready",
+		subject: "Activate your ACM@UIC account",
 		text: [
 			`Hi,`,
 			``,
-			`Your ACM@UIC membership has been approved and your account is ready.`,
+			`Your ACM@UIC membership has been approved and your AD account has been created. Activate it before signing in with Microsoft.`,
 			``,
-			`  Username: ${args.username}`,
-			`  One-time password: ${args.oneTimePassword}`,
-			``,
-			`Sign in at https://portal.acm-uic.org with "Sign in with Microsoft".`,
-			`You will be required to change this password at first sign-in.`,
+			credentialDeliveryInstructions({
+				username: args.username,
+				oneTimePassword: args.oneTimePassword,
+				publicOrigin: process.env.ORIGIN || process.env.BETTER_AUTH_URL,
+			}),
 			``,
 			`— ACM@UIC`,
 		].join("\n"),

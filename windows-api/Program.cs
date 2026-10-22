@@ -29,6 +29,14 @@ if (asService)
         builder.Services.Configure<WindowsServiceLifetimeOptions>(o => o.ServiceName = "AcmProvisioning");
     }
 }
+var entraSync = builder.Configuration.GetSection("EntraSync").Get<EntraSyncOptions>() ?? new();
+entraSync.Validate();
+builder.Services.AddSingleton(entraSync);
+builder.Services.AddSingleton<EntraSyncQueue>();
+builder.Services.AddSingleton<IEntraSyncQueue>(services => services.GetRequiredService<EntraSyncQueue>());
+builder.Services.AddSingleton<AdSyncNotifications>();
+builder.Services.AddSingleton<IEntraSyncRunner, PowerShellEntraSyncRunner>();
+builder.Services.AddHostedService<EntraSyncWorker>();
 builder.Services.AddSingleton<AdProvisioningService>();
 builder.Services.AddRateLimiter(options =>
 {
@@ -157,6 +165,31 @@ app.MapPost("/users/{sam}/password", async Task<IResult> (string sam, ChangePass
     {
         // No exception/request logging on a path that handles plaintext passwords.
         return Results.Json(new { error = "Active Directory is unavailable. Contact ACM support." }, statusCode: 502);
+    }
+}).RequireRateLimiting("password-change");
+
+app.MapPost("/users/{sam}/activate", async Task<IResult> (string sam, ActivateAccountRequest req, AdProvisioningService ad, HttpContext context) =>
+{
+    context.Response.Headers.CacheControl = "no-store";
+    if (string.IsNullOrWhiteSpace(sam) || sam.Length > 20 || !Guid.TryParse(req.EventId, out _)
+        || string.IsNullOrEmpty(req.CurrentPassword) || req.CurrentPassword.Length > 256
+        || string.IsNullOrEmpty(req.NewPassword) || req.NewPassword.Length > 256
+        || req.CurrentPassword == req.NewPassword)
+        return Results.BadRequest(new { error = "Activation was rejected." });
+    try
+    {
+        var activated = await ad.ActivateAccountAsync(sam, req, context.RequestAborted);
+        return activated ? Results.Ok(new { ok = true })
+            : Results.BadRequest(new { error = "Activation was rejected." });
+    }
+    catch (PasswordChangeException)
+    {
+        return Results.BadRequest(new { error = "Activation was rejected." });
+    }
+    catch
+    {
+        // A change may have applied before an error. Never log credentials or retry.
+        return Results.Json(new { error = "Activation outcome could not be confirmed." }, statusCode: 502);
     }
 }).RequireRateLimiting("password-change");
 

@@ -108,8 +108,16 @@ describe("native Node worker runtime", () => {
     const mailDir = env.MAIL_DIR!;
     const mail = readdirSync(mailDir);
     expect(mail).toHaveLength(1);
-    expect(readFileSync(join(mailDir, mail[0]!), "utf8")).toContain(
-      "One-time password:",
+    const body = readFileSync(join(mailDir, mail[0]!), "utf8");
+    expect(body).toContain("Temporary password:");
+    expect(body).toContain(
+      "1. Activate your account at http://localhost:5173/activate/",
     );
+    expect(body).toContain("choose a new password");
+    expect(body).toContain("2. Allow up to 30 minutes");
+    expect(body).toContain(
+      '3. Visit http://localhost:5173/login/ and choose "Sign in with Microsoft" using your ACM email address and new password.',
+    );
+    expect(body.indexOf("/activate/")).toBeLessThan(body.indexOf("/login/"));
   }, 30_000);
 });

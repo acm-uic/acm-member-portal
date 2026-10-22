@@ -32,6 +32,10 @@ import { loadSignupQueue, provisioningErrorText } from "~/lib/signups/queue";
 import { submissionAnswers } from "~/lib/forms/submission-answers";
 import type { FormSchemaDefinition } from "~/lib/types";
 import { requestCredentials } from "~/lib/provisioning/credential-delivery-client";
+import {
+  accountOnboardingUrls,
+  credentialDeliveryInstructions,
+} from "~/lib/credential-instructions";
 
 type ManualCredentials = {
   id: string;
@@ -59,6 +63,9 @@ export const useSignupQueue = routeLoader$(async (event) => {
   );
 
   return {
+    onboardingUrls: accountOnboardingUrls(
+      process.env.ORIGIN || process.env.BETTER_AUTH_URL,
+    ),
     page,
     hasNext: rows.length > PAGE_SIZE,
     rows: rows
@@ -404,7 +411,7 @@ export default component$(() => {
                           ? "Awaiting review"
                           : manualCredentials.value?.id === s.provisioningId ||
                               s.manualCredentialsReady
-                            ? "AD account ready · awaiting password confirmation"
+                            ? "AD account created · awaiting credential delivery"
                             : s.provisioningStatus === "processing"
                               ? "Creating AD account"
                               : s.provisioningStatus === "failed"
@@ -639,11 +646,24 @@ export default component$(() => {
                             </span>
                           </p>
                           <p class="text-body-sm text-text2 m-0">
-                            The AD account is ready with this temporary
-                            password. Copy these credentials to distribute to
-                            the applicant, then confirm below to finish
-                            approval. They must change their password at first
-                            sign-in. No email will be sent.
+                            The AD account has been created. Give the applicant
+                            these credentials and the activation instructions,
+                            then confirm delivery below. No email will be sent.
+                          </p>
+                          <p class="text-body-sm text-text2 m-0">
+                            First, they must{" "}
+                            <a
+                              href={queue.value.onboardingUrls.activation}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              class="text-accent underline"
+                            >
+                              activate their account
+                            </a>{" "}
+                            with the temporary password and choose a new
+                            password. Allow up to 30 minutes for
+                            synchronization, then use the new password to sign
+                            in with Microsoft.
                           </p>
                           <p class="text-body-sm text-text1 m-0">
                             Username:{" "}
@@ -672,7 +692,13 @@ export default component$(() => {
                                 if (!credentials) return;
                                 try {
                                   await navigator.clipboard.writeText(
-                                    `Username: ${credentials.username}\nTemporary password: ${credentials.oneTimePassword}`,
+                                    credentialDeliveryInstructions({
+                                      username: credentials.username,
+                                      oneTimePassword:
+                                        credentials.oneTimePassword,
+                                      publicOrigin:
+                                        queue.value.onboardingUrls.activation,
+                                    }),
                                   );
                                   passwordCopied.value = true;
                                 } catch {
@@ -683,7 +709,7 @@ export default component$(() => {
                             >
                               {passwordCopied.value
                                 ? "Copied"
-                                : "Copy credentials"}
+                                : "Copy credentials and instructions"}
                             </button>
                             <button
                               type="button"
@@ -702,7 +728,7 @@ export default component$(() => {
                                   });
                                   manualCredentials.value = undefined;
                                   passwordCopied.value = false;
-                                  actionSuccess.value = `Approval complete for ${credentials.username}. The copied password is ready to use.`;
+                                  actionSuccess.value = `AD account created and credentials delivered for ${credentials.username}. The applicant must activate their account, then allow password synchronization before Microsoft sign-in.`;
                                   try {
                                     await navigate(undefined, {
                                       replaceState: true,
@@ -723,8 +749,8 @@ export default component$(() => {
                               }}
                             >
                               {manualBusy.value
-                                ? "Finishing approval..."
-                                : "I've copied the password"}
+                                ? "Confirming delivery..."
+                                : "I've delivered the credentials"}
                             </button>
                             <button
                               type="button"

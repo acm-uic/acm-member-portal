@@ -1,6 +1,7 @@
 import { $, component$ } from "@builder.io/qwik";
 import {
 	Form,
+	Link,
 	routeAction$,
 	routeLoader$,
 	useLocation,
@@ -33,9 +34,7 @@ export const useDevLogin = routeAction$(
 			return { ok: false as const, error: "Dev login is disabled." };
 		}
 		const next = String(data.next || "/dashboard");
-		const { resolveDevLoginEmail } = await import(
-			"~/lib/dev/login-identifier"
-		);
+		const { resolveDevLoginEmail } = await import("~/lib/dev/login-identifier");
 		const email = await resolveDevLoginEmail(data.login);
 		if (!email) {
 			return {
@@ -166,6 +165,14 @@ export default component$(() => {
 						Sign in with Microsoft
 					</button>
 				) : null}
+				<p class="text-text2 text-body-sm m-0">
+					Received a temporary password?{" "}
+					<Link href="/activate/" class="text-accent underline">
+						Activate your account
+					</Link>{" "}
+					first to choose a new password. Allow up to 30 minutes for
+					synchronization, then sign in with Microsoft using your new password.
+				</p>
 			</div>
 		</main>
 	);
