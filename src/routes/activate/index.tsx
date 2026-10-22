@@ -80,8 +80,7 @@ export default component$(() => {
         <h1 class="font-display text-heading m-0">Activate your ACM account</h1>
         <p id="activation-help" class="text-body text-text2 m-0">
           After your signup is approved and you receive temporary credentials,
-          set your own ACM password here. Your new password needs to synchronize
-          with Microsoft before you can sign in. Enter your ACM username, without
+          set your own ACM password here. Enter your ACM username, without
           the @domain suffix.
         </p>
         {!finished && (
@@ -155,7 +154,7 @@ export default component$(() => {
               class={`text-body m-0 ${result.value.ok ? "text-success" : "text-danger"}`}
             >
               {result.value.ok
-                ? "Your ACM password was changed. In a few minutes, try signing in with Microsoft using your ACM email address and new password. If your new password is not accepted yet, allow up to 30 minutes for synchronization and try again. Contact ACM support if you still cannot sign in."
+                ? "Your ACM password was changed. In a few minutes, try signing in with Microsoft using your ACM email address and new password. If your new password is not accepted yet, allow up to 30 minutes for synchronization and try again. Contact ACM SysAdmins if you still cannot sign in."
                 : result.value.error}
             </p>
           )}
