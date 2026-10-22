@@ -228,14 +228,38 @@ fixed progress/failure messages are logged.
    and SYSTEM. Keep the directory outside `C:\srv\acm-provisioning`, because
    deployment replaces that installation directory. Do not share one queue
    directory between service instances or delete pending jobs during deployment.
-4. Verify `Import-Module ADSync`, `Get-ADSyncScheduler`, and both sync commands
-   under the **actual API service identity**, not just your administrator shell.
-   The existing AD OU permissions alone do not grant Connect engine access.
-   Configure the required Connect permissions with your identity administrator;
-   membership in `ADSyncAdmins` grants broad sync-engine management access and
-   should not be added casually. Domain Admin or LocalSystem is not required by
-   this application. No new Graph credentials, SSPR, or password writeback are
-   used.
+4. Grant the **actual API service identity** access to the local Connect groups.
+   For this installation, the `AcmProvisioning` service runs as
+   `ACMUIC\acmmemberportal`. In an elevated administrator PowerShell on the
+   Connect server, run:
+
+   ```powershell
+   Get-CimInstance Win32_Service -Filter "Name='AcmProvisioning'" |
+       Select-Object Name, StartName
+   Add-LocalGroupMember -Group ADSyncOperators -Member 'ACMUIC\acmmemberportal'
+   Add-LocalGroupMember -Group ADSyncBrowse -Member 'ACMUIC\acmmemberportal'
+   Restart-Service AcmProvisioning
+   ```
+
+   Substitute the service's real identity if it differs. Restart after group
+   changes so the service and its PowerShell children receive a fresh access
+   token. `ADSyncOperators` allows running synchronization operations;
+   `ADSyncBrowse` supplies the accompanying browse access. Start with these
+   groups rather than granting broad `ADSyncAdmins` management access. Existing
+   AD OU permissions alone do not grant Connect engine access. Do not add
+   `ADSyncPasswordSet` solely because password hash synchronization is used;
+   its permission to run `Invoke-ADSyncCSObjectPasswordHashSync` has not been
+   established for this deployment.
+
+   Verify `Import-Module ADSync`, `Get-ADSyncScheduler`, and both sync commands
+   under the service identity, not just your administrator shell. A successful
+   scheduler read does not establish permission to invoke either sync command.
+   Verify `Directory` and `UserHash` request-accepted messages separately. A
+   successful Microsoft sign-in or Connect Event 657 with `Result: Success`
+   confirms synchronization occurred, but does not distinguish an API-triggered
+   request from the normal schedule.
+   Domain Admin or LocalSystem is not required by this application. No new Graph
+   credentials, SSPR, or password writeback are used.
 5. Set the service environment/configuration and restart it:
 
    ```text
@@ -248,6 +272,108 @@ fixed progress/failure messages are logged.
    enabled startup. The timeout must be between 10 and 600 seconds. Missing
    scripts, denied PowerShell execution, ADSync failures, and insufficient
    permissions cause fixed warning messages and persistent retries.
+
+### Create host directories and settings
+
+Run this first-time setup in an **elevated administrator Windows PowerShell** on
+the active Connect server before enabling the worker. Substitute the actual
+service identity if it differs. The settings directory gives the service
+Read & execute; the separate queue directory gives it Modify. Administrators and
+SYSTEM retain Full Control. Review existing explicit ACL entries when reusing
+directories: `icacls /grant:r` replaces grants for the named identities, not
+unrelated explicit grants.
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$syncServiceIdentity = 'ACMUIC\acmmemberportal'
+$syncSettingsDir = 'C:\ProgramData\ACM\EntraSync'
+$syncQueueDir = 'C:\ProgramData\ACM\EntraSyncQueue'
+$syncSettingsPath = Join-Path $syncSettingsDir 'settings.json'
+
+New-Item -ItemType Directory -Path $syncSettingsDir -Force | Out-Null
+New-Item -ItemType Directory -Path $syncQueueDir -Force | Out-Null
+
+# Well-known SIDs avoid localized Administrators/SYSTEM names.
+icacls $syncSettingsDir /inheritance:r /grant:r `
+    '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' `
+    "${syncServiceIdentity}:(OI)(CI)RX"
+if ($LASTEXITCODE -ne 0) { throw 'Failed to configure settings directory ACL.' }
+
+icacls $syncQueueDir /inheritance:r /grant:r `
+    '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' `
+    "${syncServiceIdentity}:(OI)(CI)M"
+if ($LASTEXITCODE -ne 0) { throw 'Failed to configure queue directory ACL.' }
+
+# Preserve host-specific settings on subsequent runs.
+if (-not (Test-Path -LiteralPath $syncSettingsPath)) {
+    @{
+        ConnectorName = 'acmuic.org'
+        UsersOu = 'OU=ACMUsers,DC=acmuic,DC=org'
+    } | ConvertTo-Json | Set-Content -LiteralPath $syncSettingsPath -Encoding UTF8
+}
+
+Get-Content -LiteralPath $syncSettingsPath -Raw | ConvertFrom-Json |
+    Select-Object ConnectorName, UsersOu
+icacls $syncSettingsPath
+icacls $syncQueueDir
+```
+
+`settings.json` is required for **both** directory and password requests; it is
+not created by deployment or by setting `EntraSync__Enabled=true`. The connector
+name must match the AD connector in Connect, and `UsersOu` must be the managed
+base OU, including its descendant year/month OUs. Both directories are outside
+the replaced installation directory. Keep their contents and ACLs during
+deployment; never empty a live queue to fix setup.
+
+The worker reads `settings.json` on every attempt. Correcting this file does not
+require another password change or service restart; pending jobs retry within
+their backoff window, up to five minutes after a failed attempt. Restart after
+changing group membership or service environment variables. Existing files with
+custom ACLs must also allow the service to read settings and modify queue files.
+
+### Read-only checks under the service identity
+
+Where interactive logon is permitted, an administrator can open a diagnostic
+session with the service identity. Enter its password locally, never in a command
+argument or a shared log. This is a diagnostic technique, not a requirement to
+grant interactive logon to the service account.
+
+```powershell
+runas /user:ACMUIC\acmmemberportal "powershell.exe -NoProfile -NoExit"
+```
+
+Run the following in that new window. These checks do not create accounts,
+change passwords, or trigger synchronization:
+
+```powershell
+$ErrorActionPreference = 'Stop'
+whoami
+whoami /groups
+
+$syncSettings = Get-Content -LiteralPath `
+    'C:\ProgramData\ACM\EntraSync\settings.json' -Raw | ConvertFrom-Json
+if ([string]::IsNullOrWhiteSpace($syncSettings.ConnectorName) -or
+    [string]::IsNullOrWhiteSpace($syncSettings.UsersOu)) {
+    throw 'ConnectorName and UsersOu are required.'
+}
+$syncSettings | Select-Object ConnectorName, UsersOu
+icacls 'C:\ProgramData\ACM\EntraSyncQueue'
+
+Import-Module ADSync -ErrorAction Stop
+Get-Command Get-ADSyncScheduler, Start-ADSyncSyncCycle, Invoke-ADSyncCSObjectPasswordHashSync
+Get-ADSyncScheduler -ErrorAction Stop |
+    Select-Object SyncCycleEnabled, SyncCycleInProgress, StagingModeEnabled, SchedulerSuspended
+Get-ExecutionPolicy -List
+```
+
+Expect the service identity and its refreshed Operators/Browse memberships,
+readable settings, all three commands, `SyncCycleEnabled = True`, and staging and
+suspension disabled. A busy directory cycle should clear normally; the worker
+retries rather than interrupting it. Command discovery and a scheduler read do
+not prove permission to execute the two sync triggers. Enabled API startup
+separately checks queue write access. If interactive logon is denied, use your
+approved diagnostic mechanism under the same identity rather than testing only
+as an administrator.
 
 Look for `Entra synchronization worker enabled`, sync-request accepted messages,
 or retry/persistence errors in service logging. An accepted request is not a
@@ -275,8 +401,147 @@ in an isolated subprocess. Live Connect permissions, sync completion, and
 Microsoft sign-in still require deployment-time validation.
 
 Microsoft references: [ADSync commands](https://learn.microsoft.com/en-us/entra/identity/hybrid/connect/reference-connect-adsync),
+[delegating sync operations with ADSyncOperators](https://learn.microsoft.com/en-us/answers/questions/889690/delegate-permssion-on-aadconnect),
 [directory scheduler](https://learn.microsoft.com/en-us/entra/identity/hybrid/connect/how-to-connect-sync-feature-scheduler),
 and [password synchronization](https://learn.microsoft.com/en-us/entra/identity/hybrid/connect/how-to-connect-password-hash-synchronization).
+
+### Troubleshoot synchronization and sign-in
+
+Use **Event Viewer → Windows Logs → Application**. API worker entries use source
+`AcmProvisioning` and category `AcmProvisioning.EntraSyncWorker`; Connect entries
+use sources such as `Directory Synchronization` and `ADSync`. Include Information
+events in the view, not only warnings/errors. The shipped `appsettings.json`
+sets `Logging:EventLog:LogLevel:Default` to `Information`; check environment
+overrides if API success messages are missing. For example, from an
+administrator session:
+
+```powershell
+Get-WinEvent -FilterHashtable @{
+    LogName = 'Application'
+    ProviderName = 'AcmProvisioning'
+    StartTime = (Get-Date).AddMinutes(-30)
+} -MaxEvents 50 | Select-Object TimeCreated, LevelDisplayName, Message
+```
+
+| Symptom | Next check |
+| --- | --- |
+| Microsoft does not recognize the username | Confirm the exact ACM UPN and AD account, then check directory import/export and the `Directory` request result. Object synchronization and password synchronization are separate. |
+| Microsoft recognizes the username but rejects the new password | Confirm the portal activation receipt and AD `pwdLastSet` is nonzero; allow propagation before another attempt. Check the per-user password-sync diagnostic and Event 657 for the same DN. Do not repeatedly reset or reissue credentials. |
+| `Entra Directory` or `Entra UserHash` request fails | Run the service-identity checks above: missing/unreadable settings, module or command availability, group token, script execution policy, and scheduler state. A generic warning does not identify which check failed. |
+| No API worker events | Check the running deployment, `EntraSync__Enabled`, service restart, Information-level logging, event filters, and the service's startup logs. A healthy `/healthz` does not establish sync health. |
+| Queue cannot load or persist progress | Check the configured absolute path, service Modify access, disk availability, and that only one process owns the directory. Preserve pending jobs; do not delete `queue.json` or share it between instances. |
+
+The worker logs `Entra Directory sync request accepted` and
+`Entra UserHash sync request accepted` separately. A failure retries only
+synchronization, never account creation or the password change. Raw PowerShell
+errors are deliberately discarded, so expanding the generic warning does not
+reveal the underlying exception. If basic checks pass, reproduce the fixed sync
+operation under the service identity in a controlled diagnostic session without
+supplying or logging passwords. Record any such invocation as **manual
+intervention**, not proof of the automatic path.
+
+Connect Event **657** with `Result: Success` confirms that the identified user's
+password hash synchronized; `Result: Failed` is a failure. Match the account DN,
+connector, and timestamp. `PwdChangeOnLogon=False` is consistent with completing
+the initial AD password change. Neither this event nor a successful login alone
+identifies whether the API request or the normal schedule triggered sync. See
+[Microsoft's password-sync event reference](https://learn.microsoft.com/en-us/troubleshoot/entra/entra-id/user-prov-sync/troubleshoot-pwd-sync#event-id-messages-in-event-viewer).
+
+For a per-user diagnostic, run on the Connect server with the necessary
+administrative access; obtain the exact current DN rather than assuming a
+year/month OU:
+
+```powershell
+Import-Module ADSync
+Get-ADSyncConnector | Where-Object { $_.ConnectorTypeName -eq 'AD' } |
+    Select-Object Name, Identifier
+Import-Module ActiveDirectory
+$testUsername = Read-Host 'Exact test username'
+$testAdUser = Get-ADUser -Identity $testUsername -Properties pwdLastSet, PasswordLastSet
+$testAdUser | Format-List SamAccountName, UserPrincipalName, DistinguishedName, pwdLastSet, PasswordLastSet
+Import-Module ADSyncDiagnostics
+Invoke-ADSyncDiagnostics -PasswordSync -ADConnectorName 'acmuic.org' `
+    -DistinguishedName $testAdUser.DistinguishedName
+```
+
+Use the connector name from the first command if it differs. The ActiveDirectory
+module is needed for these operator diagnostics, not for normal API operation.
+
+### Live onboarding verification
+
+1. Complete host setup and service restart **before** creating a uniquely named,
+   disposable signup. Use synthetic contact details and **Show temporary
+   password** to avoid sending test mail. Confirm any earlier cleanup sync has
+   finished, then leave manual sync off during the test.
+2. Approve the signup, confirm its AD account was created, and acknowledge
+   credential delivery. Record the provisioning event ID and approval time.
+3. Have the applicant complete `/activate/` with the temporary password and a new
+   password. Record the portal activation receipt and confirm AD `pwdLastSet` is
+   nonzero. Keep passwords out of tickets, screenshots, logs, and test reports.
+4. Record `Directory` and `UserHash` request-accepted messages and the matching
+   Connect password-sync result, including timestamps and time zone. These are
+   separate checks from the portal's AD success response.
+5. Allow synchronization, then sign in with Microsoft using the ACM UPN and new
+   password. Space retries by a few minutes instead of repeatedly submitting
+   credentials. The October 22, 2026 smoke test reported successful hash sync
+   about 34 seconds after activation and accepted Microsoft password sign-in on
+   a retry about three minutes after activation. These are observations, not a
+   latency guarantee; portal guidance allows up to 30 minutes before escalation.
+6. Complete the tenant's security enrollment requirements. For a disposable test
+   account, defer setup only when explicitly approved and offered by Microsoft.
+   Verify the OAuth callback reaches the portal dashboard under the **test
+   identity**, with membership Active and AD account Provisioned.
+7. Record whether any manual sync, password reset, service restart, or host change
+   occurred after approval. Such intervention may restore access, but does not
+   validate an onboarding run without intervention. If worker acceptance logs
+   are unavailable, report successful synchronization/sign-in without claiming
+   that the API triggers were verified. Then perform the cleanup below.
+
+### Clean up disposable test accounts
+
+Portal records, on-prem AD accounts, and synchronized Entra accounts have
+separate lifecycles. Portal deletion does not remove AD access; AD deletion must
+be exported to Entra. The Windows API has no account-deletion endpoint, and the
+portal currently has no complete test-account deletion UI.
+
+1. Identify the exact disposable username, portal user ID (if one exists), signup
+   ID, provisioning event ID, and AD DN/event-description marker. Verify the
+   synthetic name/email and ownership; never delete by a broad `codextest%`
+   pattern. Ensure no provisioning or credential-delivery attempt is in flight.
+2. Have an authorized database operator remove the matched portal records in one
+   transaction with identity/status guards. Delete the provisioning event before
+   its signup; activation receipts and provisioning logs cascade. Deleting the
+   portal user revokes its sessions and removes linked provider accounts, member
+   profile, and role assignments through cascades. A signup that never completed
+   Microsoft login may have no portal user yet.
+3. Verify/release only that account's orphaned `username_claims` reservation.
+   Remove its hashed username activation-limit entry if appropriate, preserving
+   shared address limits. Retain audit history and append a cleanup audit entry;
+   audit actor references must be preserved rather than deleted to bypass foreign
+   keys. Confirm the exact user, signup, session, provider-account, provisioning,
+   and activation rows are gone. Do not paste production tokens or provider
+   credentials into cleanup output.
+4. On a machine with the ActiveDirectory module, inspect the exact AD account and
+   delete it with the normal confirmation prompt:
+
+   ```powershell
+   Import-Module ActiveDirectory
+   $testUsername = Read-Host 'Exact disposable test username to delete'
+   $testAdUser = Get-ADUser -Identity $testUsername -Properties Description
+   $testAdUser | Format-List SamAccountName, UserPrincipalName, DistinguishedName, Description
+   Remove-ADUser -Identity $testAdUser -Confirm:$true
+   ```
+
+5. Allow the normal directory cycle to export the deletion. After the onboarding
+   measurement has ended, an authorized operator can instead run
+   `Import-Module ADSync; Start-ADSyncSyncCycle -PolicyType Delta` on the Connect
+   server. Confirm the object leaves the active Entra user list; merely starting
+   a cycle does not confirm deletion export. Close test browser sessions and
+   remove saved test credentials without disturbing administrator sessions.
+
+The API does not queue synchronization for an external `Remove-ADUser` operation.
+Do not delete the shared sync queue during cleanup: it may contain unrelated
+account work. Do not reuse a test username until deletion has propagated.
 
 ## Host requirements
 
