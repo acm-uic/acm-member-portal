@@ -105,7 +105,7 @@ export const useApproveSignup = routeAction$(async (data, event) => {
   const id = String(data.id ?? "");
   const mode = z
     .enum(["email", "admin"])
-    .safeParse(data.deliveryMode ?? "email");
+    .safeParse(data.deliveryMode ?? "admin");
   if (!mode.success)
     return { ok: false as const, error: "Choose how to deliver credentials." };
   const eventId = crypto.randomUUID();
@@ -461,7 +461,7 @@ export default component$(() => {
                               <select
                                 aria-label={`Credential delivery for ${s.username}`}
                                 class="bg-surface1 border border-border-visible rounded-control text-text1 px-sm py-2xs"
-                                value={deliveryModes.value[s.id] ?? "email"}
+                                value={deliveryModes.value[s.id] ?? "admin"}
                                 disabled={
                                   !s.canEdit ||
                                   location.isNavigating ||
@@ -510,7 +510,7 @@ export default component$(() => {
                                   const result = await approve.submit({
                                     id: s.id,
                                     deliveryMode:
-                                      deliveryModes.value[s.id] ?? "email",
+                                      deliveryModes.value[s.id] ?? "admin",
                                   });
                                   if (!result.value.ok)
                                     actionError.value = result.value.error;
