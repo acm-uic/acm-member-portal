@@ -11,6 +11,18 @@ public interface IEntraSyncRunner
 
 public sealed class PowerShellEntraSyncRunner(EntraSyncOptions options) : IEntraSyncRunner
 {
+    internal static string RequestPayload(EntraSyncJob job) => JsonSerializer.Serialize(new
+    {
+        // Preserve the existing PowerShell protocol independently of the C# operation labels.
+        Kind = job.Kind switch
+        {
+            EntraSyncKind.Directory => "Directory",
+            EntraSyncKind.UserHash => "Password",
+            _ => throw new ArgumentException("Invalid sync operation.")
+        },
+        job.DistinguishedName
+    });
+
     internal static ProcessStartInfo StartInfo(string systemRoot, string scriptPath) => new()
     {
         FileName = Path.Combine(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
@@ -41,10 +53,7 @@ public sealed class PowerShellEntraSyncRunner(EntraSyncOptions options) : IEntra
         try
         {
             // Data travels on stdin, never interpolated into commands or command-line arguments.
-            await process.StandardInput.WriteLineAsync(JsonSerializer.Serialize(new
-            {
-                Kind = job.Kind.ToString(), job.DistinguishedName
-            }).AsMemory(), timeout.Token);
+            await process.StandardInput.WriteLineAsync(RequestPayload(job).AsMemory(), timeout.Token);
             process.StandardInput.Close();
             await process.WaitForExitAsync(timeout.Token);
             await Task.WhenAll(stdout, stderr).WaitAsync(timeout.Token);

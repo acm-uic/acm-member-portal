@@ -20,7 +20,8 @@ public sealed class EntraSyncOptions
     }
 }
 
-public enum EntraSyncKind { Directory, Password }
+// Operation labels, never credentials. Keep numeric values stable for existing queue files.
+public enum EntraSyncKind { Directory = 0, UserHash = 1 }
 public sealed record EntraSyncJob(string Key, Guid Id, EntraSyncKind Kind,
     string? DistinguishedName, int Attempts, DateTimeOffset NextAttempt);
 
@@ -121,7 +122,7 @@ public sealed class EntraSyncQueue : IEntraSyncQueue, IDisposable
     private static string Key(EntraSyncKind kind, string? dn)
     {
         if (kind == EntraSyncKind.Directory && dn is null) return "directory";
-        if (kind != EntraSyncKind.Password || string.IsNullOrWhiteSpace(dn) || dn.Length > 4096 || dn.Contains('\0'))
+        if (kind != EntraSyncKind.UserHash || string.IsNullOrWhiteSpace(dn) || dn.Length > 4096 || dn.Contains('\0'))
             throw new ArgumentException("Invalid sync job.");
         return "password:" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(dn.ToUpperInvariant())));
     }
@@ -143,7 +144,7 @@ public sealed class AdSyncNotifications(IEntraSyncQueue queue, ILogger<AdSyncNot
     public bool ChangePassword(string? dn, Func<bool> change)
     {
         var changed = change();
-        if (changed) Notify(EntraSyncKind.Password, dn);
+        if (changed) Notify(EntraSyncKind.UserHash, dn);
         return changed;
     }
 

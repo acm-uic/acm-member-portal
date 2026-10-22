@@ -1,5 +1,7 @@
 using AcmProvisioning;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Text.Json;
 using Xunit;
 
 namespace AcmProvisioning.Tests;
@@ -16,7 +18,7 @@ public sealed class EntraSyncTests : IDisposable
     {
         using var queue = new EntraSyncQueue(new() { QueueDirectory = _directory });
         queue.Enqueue(EntraSyncKind.Directory);
-        queue.Enqueue(EntraSyncKind.Password, Dn);
+        queue.Enqueue(EntraSyncKind.UserHash, Dn);
         Assert.Null(queue.Due(Future));
         Assert.False(Directory.Exists(_directory));
     }
@@ -26,7 +28,7 @@ public sealed class EntraSyncTests : IDisposable
     {
         using (var first = new EntraSyncQueue(Options))
         {
-            first.Enqueue(EntraSyncKind.Password, Dn);
+            first.Enqueue(EntraSyncKind.UserHash, Dn);
             first.Enqueue(EntraSyncKind.Directory);
             first.Enqueue(EntraSyncKind.Directory);
         }
@@ -50,9 +52,9 @@ public sealed class EntraSyncTests : IDisposable
     public void CompletionCannotLoseAChangeQueuedWhileSyncIsRunning(bool succeeded)
     {
         using var queue = new EntraSyncQueue(Options);
-        queue.Enqueue(EntraSyncKind.Password, Dn);
+        queue.Enqueue(EntraSyncKind.UserHash, Dn);
         var running = Assert.IsType<EntraSyncJob>(queue.Due(Future));
-        queue.Enqueue(EntraSyncKind.Password, Dn.ToUpperInvariant());
+        queue.Enqueue(EntraSyncKind.UserHash, Dn.ToUpperInvariant());
         queue.Finish(running, succeeded, DateTimeOffset.UtcNow);
         var newer = Assert.IsType<EntraSyncJob>(queue.Due(Future));
         Assert.NotEqual(running.Id, newer.Id);
@@ -70,8 +72,8 @@ public sealed class EntraSyncTests : IDisposable
             var job = Assert.IsType<EntraSyncJob>(queue.Due(Future));
             queue.Finish(job, false, now);
             Assert.Null(queue.Due(now));
-            queue.Enqueue(EntraSyncKind.Password, Dn);
-            Assert.Equal(EntraSyncKind.Password, queue.Due(now.AddSeconds(1))!.Kind);
+            queue.Enqueue(EntraSyncKind.UserHash, Dn);
+            Assert.Equal(EntraSyncKind.UserHash, queue.Due(now.AddSeconds(1))!.Kind);
         }
         using var reloaded = new EntraSyncQueue(Options);
         var directory = reloaded.Due(now.AddSeconds(15))!;
@@ -110,7 +112,7 @@ public sealed class EntraSyncTests : IDisposable
         queue.Enqueue(EntraSyncKind.Directory);
         var original = File.ReadAllText(Path.Combine(_directory, "queue.json"));
         Directory.CreateDirectory(Path.Combine(_directory, "queue.json.tmp"));
-        Assert.ThrowsAny<Exception>(() => queue.Enqueue(EntraSyncKind.Password, Dn));
+        Assert.ThrowsAny<Exception>(() => queue.Enqueue(EntraSyncKind.UserHash, Dn));
         Assert.Equal(original, File.ReadAllText(Path.Combine(_directory, "queue.json")));
         var directory = queue.Due(Future)!;
         Assert.Equal(EntraSyncKind.Directory, directory.Kind);
@@ -124,7 +126,7 @@ public sealed class EntraSyncTests : IDisposable
     public void InvalidPasswordJobCannotEnterQueue(string? dn)
     {
         using var queue = new EntraSyncQueue(Options);
-        Assert.Throws<ArgumentException>(() => queue.Enqueue(EntraSyncKind.Password, dn));
+        Assert.Throws<ArgumentException>(() => queue.Enqueue(EntraSyncKind.UserHash, dn));
         Assert.Null(queue.Due(Future));
     }
 
@@ -152,7 +154,7 @@ public sealed class EntraSyncTests : IDisposable
         var calls = 0;
         Assert.True(hooks.ChangePassword(Dn, () => { calls++; return true; }));
         Assert.Equal(1, calls);
-        Assert.Equal((EntraSyncKind.Password, (string?)Dn), Assert.Single(queue.Jobs));
+        Assert.Equal((EntraSyncKind.UserHash, (string?)Dn), Assert.Single(queue.Jobs));
         Assert.False(hooks.ChangePassword(Dn, () => false));
         Assert.Throws<PasswordChangeException>(() => hooks.ChangePassword(Dn, () => throw new PasswordChangeException("rejected")));
         Assert.Single(queue.Jobs);
@@ -177,7 +179,7 @@ public sealed class EntraSyncTests : IDisposable
     public async Task WorkerRetriesOnlyTheSyncRequestAndRemovesSuccessfulWork(bool fail)
     {
         using var queue = new EntraSyncQueue(Options);
-        queue.Enqueue(EntraSyncKind.Password, Dn);
+        queue.Enqueue(EntraSyncKind.UserHash, Dn);
         var job = queue.Due(Future)!;
         var runner = new FakeRunner { Fail = fail };
         var worker = new EntraSyncWorker(Options, queue, runner, NullLogger<EntraSyncWorker>.Instance);
@@ -189,6 +191,72 @@ public sealed class EntraSyncTests : IDisposable
             Assert.Equal(1, queue.Due(Future)!.Attempts);
         }
         else Assert.Null(queue.Due(Future));
+    }
+
+    [Fact]
+    public void ExistingQueueFilesAndPowerShellProtocolRemainCompatible()
+    {
+        Directory.CreateDirectory(_directory);
+        // Snapshot from the original queue format: Kind=1 and the original key prefix.
+        File.WriteAllText(Path.Combine(_directory, "queue.json"), """
+            {
+              "password:C62E71E95B6333C493DC8970C0AE64958824F4B3DC7516D4A203431768EB4954": {
+                "Key": "password:C62E71E95B6333C493DC8970C0AE64958824F4B3DC7516D4A203431768EB4954",
+                "Id": "00000000-0000-0000-0000-000000000001",
+                "Kind": 1,
+                "DistinguishedName": "CN=sync-test,OU=10,OU=2026,OU=ACMUsers,DC=acmuic,DC=org",
+                "Attempts": 2,
+                "NextAttempt": "2026-01-01T00:00:00Z"
+              }
+            }
+            """);
+        using var queue = new EntraSyncQueue(Options);
+        var job = Assert.IsType<EntraSyncJob>(queue.Due(Future));
+        Assert.Equal(EntraSyncKind.UserHash, job.Kind);
+        Assert.Equal(2, job.Attempts);
+        using var payload = JsonDocument.Parse(PowerShellEntraSyncRunner.RequestPayload(job));
+        Assert.Equal("Password", payload.RootElement.GetProperty("Kind").GetString());
+        Assert.Equal(Dn, payload.RootElement.GetProperty("DistinguishedName").GetString());
+        queue.Finish(job, true, DateTimeOffset.UtcNow);
+        Assert.Null(queue.Due(Future));
+    }
+
+    [Fact]
+    public async Task QueuePayloadsAndDiagnosticsNeverContainAccountCredentials()
+    {
+        const string temporaryCredential = "temporary-sentinel-8Q!";
+        const string currentCredential = "current-sentinel-4W!";
+        const string nextCredential = "next-sentinel-6E!";
+        using var queue = new EntraSyncQueue(Options);
+        var notificationsLog = new CapturingLogger<AdSyncNotifications>();
+        var hooks = new AdSyncNotifications(queue, notificationsLog);
+        var response = hooks.Provision(() => new("sync-test", false, temporaryCredential));
+        Assert.Equal(temporaryCredential, response.OneTimePassword);
+        Assert.True(hooks.ChangePassword(Dn, () => currentCredential != nextCredential));
+        var snapshot = File.ReadAllText(Path.Combine(_directory, "queue.json"));
+
+        // Finish the directory request, then exercise failure and success logging for user hash sync.
+        var workerLog = new CapturingLogger<EntraSyncWorker>();
+        var directory = queue.Due(Future)!;
+        await new EntraSyncWorker(Options, queue, new FakeRunner(), workerLog).ProcessAsync(directory, CancellationToken.None);
+        var job = queue.Due(Future)!;
+        var failed = new FakeRunner { Failure = new InvalidOperationException($"{currentCredential} {nextCredential}") };
+        await new EntraSyncWorker(Options, queue, failed, workerLog).ProcessAsync(job, CancellationToken.None);
+        await new EntraSyncWorker(Options, queue, new FakeRunner(), workerLog).ProcessAsync(queue.Due(Future)!, CancellationToken.None);
+
+        // Notification persistence failures must also avoid logging credentials/call-stack exceptions.
+        var unavailable = new AdSyncNotifications(new RecordingQueue { Fail = true }, notificationsLog);
+        Assert.True(unavailable.ChangePassword(Dn, () => currentCredential != nextCredential));
+        var diagnostics = string.Join('\n', notificationsLog.Messages.Concat(workerLog.Messages));
+        Assert.NotEmpty(notificationsLog.Messages);
+        Assert.NotEmpty(workerLog.Messages);
+        foreach (var secret in new[] { temporaryCredential, currentCredential, nextCredential })
+        {
+            Assert.DoesNotContain(secret, snapshot);
+            Assert.DoesNotContain(secret, PowerShellEntraSyncRunner.RequestPayload(job));
+            Assert.DoesNotContain(secret, diagnostics);
+        }
+        Assert.DoesNotContain(Dn, diagnostics);
     }
 
     [Fact]
@@ -238,14 +306,25 @@ public sealed class EntraSyncTests : IDisposable
     private sealed class FakeRunner : IEntraSyncRunner
     {
         public bool Fail { get; init; }
+        public Exception? Failure { get; init; }
         public int Calls { get; private set; }
         public Task RunAsync(EntraSyncJob job, CancellationToken cancellationToken)
         {
             Calls++;
             cancellationToken.ThrowIfCancellationRequested();
+            if (Failure is not null) throw Failure;
             if (Fail) throw new InvalidOperationException("sync unavailable");
             return Task.CompletedTask;
         }
+    }
+    private sealed class CapturingLogger<T> : ILogger<T>
+    {
+        public List<string> Messages { get; } = new();
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel level, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Messages.Add(formatter(state, exception) + (exception?.ToString() ?? ""));
     }
     public void Dispose()
     {
