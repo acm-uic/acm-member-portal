@@ -218,6 +218,12 @@ the [Windows API synchronization setup](windows-api/README.md#automatic-entra-co
 This accelerates the existing sync process without changing portal success
 responses or claiming cloud sign-in readiness. It is disabled until configured.
 
+The Windows API runbook also covers [host directories and settings](windows-api/README.md#create-host-directories-and-settings),
+[service-identity checks](windows-api/README.md#read-only-checks-under-the-service-identity),
+[sync troubleshooting](windows-api/README.md#troubleshoot-synchronization-and-sign-in),
+[live onboarding verification](windows-api/README.md#live-onboarding-verification),
+and [disposable test-account cleanup](windows-api/README.md#clean-up-disposable-test-accounts).
+
 For rollout:
 
 1. Apply `0015_account_activation.sql` with the normal migration runner before
