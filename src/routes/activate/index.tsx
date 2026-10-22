@@ -80,9 +80,8 @@ export default component$(() => {
         <h1 class="font-display text-heading m-0">Activate your ACM account</h1>
         <p id="activation-help" class="text-body text-text2 m-0">
           After your signup is approved and you receive temporary credentials,
-          choose your own ACM password here before signing in with Microsoft.
-          Enter your ACM username, without @acmuic.org. Active Directory checks
-          its password policies.
+          set your own ACM password here before signing in normally.
+          Enter your ACM username, without the @domain suffix.
         </p>
         {!finished && (
           <form
