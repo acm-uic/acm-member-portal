@@ -181,6 +181,103 @@ the password unchanged; a policy-rejected password displays AD's error; a valid
 change permits sign-in with the new password and rejects the old one; an initial
 temporary password can be changed; and repeated attempts return `429`.
 
+## Automatic Entra Connect synchronization
+
+The API can request synchronization on the **same Windows host as the active
+Entra Connect installation**. This integration is disabled by default; it does
+not install Connect, change the scheduler, synchronize temporary passwords, or
+prove Microsoft sign-in readiness.
+
+After a successful `POST /users` (including an idempotent replay), it queues
+`Start-ADSyncSyncCycle -PolicyType Delta -InteractiveMode:$false`. After a
+successful `POST /users/{sam}/activate` or `POST /users/{sam}/password`, it queues
+`Invoke-ADSyncCSObjectPasswordHashSync` for the account's AD distinguished name.
+Rejections and missing accounts do not queue password synchronization.
+Provisioning does not queue a temporary password hash: `pwdLastSet = 0` remains
+in effect until activation, with the existing tenant settings.
+
+The queue stores only a job kind, account DN for password jobs, attempt metadata,
+and IDs. It never receives passwords or bearer tokens. It persists atomic JSON
+snapshots with a single-process file lease, combines directory requests and
+pending password requests for the same DN, and retries failures with a 15-second
+to 5-minute backoff. Requests added while a sync runs are retained. A busy,
+disabled, suspended, or staging directory scheduler is not overridden. Password
+sync is independent of the object scheduler's enabled/busy state, but is also
+blocked on a suspended or staging server. A new account not yet present in the
+connector space may require a later attempt after directory synchronization.
+
+PowerShell runs in a separate, hidden Windows PowerShell 5.1 process using the
+service identity. It executes a fixed published script, accepts JSON data on
+stdin, and passes the DN as a literal cmdlet parameter. No command strings are
+built from account data. No hosted PowerShell SDK or remoting is used. Each
+invocation has a configurable timeout; PowerShell output is discarded and only
+fixed progress/failure messages are logged.
+
+### Enable on the Connect host
+
+1. Publish/deploy the API, including the `EntraSync` subdirectory. Ensure the
+   host's execution policy permits these administrator-reviewed scripts (sign
+   them if required). The runner does not bypass execution policy.
+2. Create `C:\ProgramData\ACM\EntraSync\settings.json` from
+   `EntraSync\settings.example.json`. Set `ConnectorName` to `acmuic.org` and
+   `UsersOu` to `OU=ACMUsers,DC=acmuic,DC=org` for this installation. Password DNs
+   outside that managed OU are rejected. Only administrators should be able to
+   write the settings and scripts; the service identity needs read/execute access.
+3. Pre-create `C:\ProgramData\ACM\EntraSyncQueue` and grant the API service
+   identity Modify access, with access otherwise restricted to Administrators
+   and SYSTEM. Keep the directory outside `C:\srv\acm-provisioning`, because
+   deployment replaces that installation directory. Do not share one queue
+   directory between service instances or delete pending jobs during deployment.
+4. Verify `Import-Module ADSync`, `Get-ADSyncScheduler`, and both sync commands
+   under the **actual API service identity**, not just your administrator shell.
+   The existing AD OU permissions alone do not grant Connect engine access.
+   Configure the required Connect permissions with your identity administrator;
+   membership in `ADSyncAdmins` grants broad sync-engine management access and
+   should not be added casually. Domain Admin or LocalSystem is not required by
+   this application. No new Graph credentials, SSPR, or password writeback are
+   used.
+5. Set the service environment/configuration and restart it:
+
+   ```text
+   EntraSync__Enabled=true
+   EntraSync__QueueDirectory=C:\ProgramData\ACM\EntraSyncQueue
+   EntraSync__TimeoutSeconds=120
+   ```
+
+   A relative/unwritable queue path, corrupt queue, or concurrent owner prevents
+   enabled startup. The timeout must be between 10 and 600 seconds. Missing
+   scripts, denied PowerShell execution, ADSync failures, and insufficient
+   permissions cause fixed warning messages and persistent retries.
+
+Look for `Entra synchronization worker enabled`, sync-request accepted messages,
+or retry/persistence errors in service logging. An accepted request is not a
+completed export or evidence that the password is ready for Microsoft sign-in.
+Use the Connect diagnostics and a real test sign-in to verify the result.
+The unchanged `/healthz` response checks API liveness, not sync health.
+
+The queue is written immediately **after** AD reports success. A process crash
+in that small interval, or a later disk-write failure, can miss the extra trigger;
+normal scheduled directory/password synchronization remains the fallback. Such
+failures never turn a completed password change or creation into an HTTP error
+and never replay AD operations. Already-persisted jobs resume on service restart.
+Disabling the feature pauses the queue without deleting it.
+
+Run the .NET queue/notification/worker regressions and the Windows PowerShell
+checks without contacting AD or Connect:
+
+```powershell
+dotnet test windows-api.Tests/AcmProvisioning.Tests.csproj
+powershell.exe -NoProfile -File windows-api/EntraSync/test-sync.ps1
+```
+
+The PowerShell checks mock all ADSync calls and exercise the real stdin wrapper
+in an isolated subprocess. Live Connect permissions, sync completion, and
+Microsoft sign-in still require deployment-time validation.
+
+Microsoft references: [ADSync commands](https://learn.microsoft.com/en-us/entra/identity/hybrid/connect/reference-connect-adsync),
+[directory scheduler](https://learn.microsoft.com/en-us/entra/identity/hybrid/connect/how-to-connect-sync-feature-scheduler),
+and [password synchronization](https://learn.microsoft.com/en-us/entra/identity/hybrid/connect/how-to-connect-password-hash-synchronization).
+
 ## Host requirements
 
 - Domain-joined Windows Server 2019+ (LDAP/ADSI, no RSAT PowerShell module)

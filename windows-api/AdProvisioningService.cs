@@ -53,9 +53,11 @@ public sealed class AdProvisioningService
     private readonly string _usersOu;
     private readonly string? _domainController;
     private readonly TimeZoneInfo _timeZone;
+    private readonly AdSyncNotifications _sync;
 
-    public AdProvisioningService(IConfiguration config)
+    public AdProvisioningService(IConfiguration config, AdSyncNotifications sync)
     {
+        _sync = sync;
         _upnSuffix = config["Provisioning:UpnSuffix"] ?? throw new InvalidOperationException("Provisioning:UpnSuffix is required");
         _usersOu = config["Provisioning:UsersOu"] ?? throw new InvalidOperationException("Provisioning:UsersOu is required");
         _domainController = config["Provisioning:DomainController"];
@@ -89,7 +91,7 @@ public sealed class AdProvisioningService
             var accountName = req.AccountName;
             try
             {
-                return AdAccountCreation.Create(accountName,
+                return _sync.Provision(() => AdAccountCreation.Create(accountName,
                     () =>
                     {
                         var existing = FindUser(accountName);
@@ -101,7 +103,7 @@ public sealed class AdProvisioningService
                         return new DirectoryAccount(CreateDirectoryUser(ou, req, accountName,
                             AdUserPlacement.UserRdn(accountName)));
                     },
-                    GeneratePassword, req.EventId, req.RetryCredentialDelivery);
+                    GeneratePassword, req.EventId, req.RetryCredentialDelivery));
             }
             catch (Exception ex) when (ex is not ProvisioningException)
             {
@@ -152,8 +154,12 @@ public sealed class AdProvisioningService
                 // ChangePassword verifies the old password and enforces AD policy.
                 // Do not replace this with SetPassword, which is an administrative reset.
                 // No separate login bind: temporary/expired passwords can still be changed.
-                user.Invoke("ChangePassword", req.CurrentPassword, req.NewPassword);
-                return true;
+                var dn = user.Properties["distinguishedName"].Value?.ToString();
+                return _sync.ChangePassword(dn, () =>
+                {
+                    user.Invoke("ChangePassword", req.CurrentPassword, req.NewPassword);
+                    return true;
+                });
             }
             catch (Exception ex) when (AdErrors.IsPasswordRejection(ex))
             {
@@ -169,7 +175,8 @@ public sealed class AdProvisioningService
             if (user is null) return false;
             try
             {
-                return AdAccountActivation.Activate(new DirectoryAccount(user), req);
+                var dn = user.Properties["distinguishedName"].Value?.ToString();
+                return _sync.ChangePassword(dn, () => AdAccountActivation.Activate(new DirectoryAccount(user), req));
             }
             catch (Exception ex) when (AdErrors.IsPasswordRejection(ex))
             {

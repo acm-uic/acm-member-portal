@@ -211,6 +211,13 @@ that Microsoft sign-in is ready. After activation, allow synchronization to run
 before signing in; if it fails, an administrator should check the per-user Entra
 Connect password-sync diagnostic.
 
+The Windows API can optionally request a directory delta cycle after provisioning
+and targeted password-hash synchronization after activation or a profile password
+change. On the Entra Connect host, enable its persistent background queue using
+the [Windows API synchronization setup](windows-api/README.md#automatic-entra-connect-synchronization).
+This accelerates the existing sync process without changing portal success
+responses or claiming cloud sign-in readiness. It is disabled until configured.
+
 For rollout:
 
 1. Apply `0015_account_activation.sql` with the normal migration runner before

@@ -1,0 +1,4 @@
+{
+  "ConnectorName": "acmuic.org",
+  "UsersOu": "OU=ACMUsers,DC=acmuic,DC=org"
+}

@@ -29,6 +29,14 @@ if (asService)
         builder.Services.Configure<WindowsServiceLifetimeOptions>(o => o.ServiceName = "AcmProvisioning");
     }
 }
+var entraSync = builder.Configuration.GetSection("EntraSync").Get<EntraSyncOptions>() ?? new();
+entraSync.Validate();
+builder.Services.AddSingleton(entraSync);
+builder.Services.AddSingleton<EntraSyncQueue>();
+builder.Services.AddSingleton<IEntraSyncQueue>(services => services.GetRequiredService<EntraSyncQueue>());
+builder.Services.AddSingleton<AdSyncNotifications>();
+builder.Services.AddSingleton<IEntraSyncRunner, PowerShellEntraSyncRunner>();
+builder.Services.AddHostedService<EntraSyncWorker>();
 builder.Services.AddSingleton<AdProvisioningService>();
 builder.Services.AddRateLimiter(options =>
 {
