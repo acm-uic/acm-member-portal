@@ -21,9 +21,21 @@ export default component$(() => {
         </p>
         <h1 class="font-display text-heading m-0">Pending review</h1>
         <p class="text-text2 text-body m-0">
-          An officer will review your signup. Once approved, your ACM Microsoft
-          account is created and your sign-in details are emailed to your
-          personal address.
+          An officer will review your signup. Once approved, your ACM account
+          will be created. An officer will give you a username and temporary
+          password, or send them to your personal email address.
+        </p>
+        <p class="text-text2 text-body m-0">
+          When you receive your credentials,{" "}
+          <Link href="/activate/" class="text-accent underline">
+            activate your account
+          </Link>{" "}
+          and choose a new password. Allow up to 30 minutes for it to
+          synchronize, then{" "}
+          <Link href="/login/" class="text-accent underline">
+            sign in with Microsoft
+          </Link>{" "}
+          using your ACM email address and new password.
         </p>
         {linked && inGuild !== "1" ? (
           <DiscordJoinCta prominent />

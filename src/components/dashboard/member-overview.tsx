@@ -36,10 +36,8 @@ export const MemberOverview = component$<{
 				tone={props.metrics.membership === "Active" ? "success" : "warning"}
 			/>
 			<MetricCard
-				label="Account"
-				value={
-					props.metrics.provisioning.tone === "success" ? "Ready" : "Pending"
-				}
+				label="AD account"
+				value={props.metrics.provisioning.label}
 				note={props.metrics.provisioning.note}
 				tone={props.metrics.provisioning.tone}
 			/>
@@ -50,9 +48,7 @@ export const MemberOverview = component$<{
 			/>
 			<MetricCard
 				label="Graduation"
-				value={
-					props.metrics.gradYear ? String(props.metrics.gradYear) : "—"
-				}
+				value={props.metrics.gradYear ? String(props.metrics.gradYear) : "—"}
 				note="Expected year"
 			/>
 		</section>

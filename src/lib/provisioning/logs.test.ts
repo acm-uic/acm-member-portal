@@ -109,16 +109,14 @@ describe("persistent provisioning diagnostics", () => {
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       await drain(
-        vi
-          .fn<typeof fetch>()
-          .mockResolvedValue(
-            new Response(
-              JSON.stringify({
-                error: "AD create failed: Access is denied.\r\n",
-              }),
-              { status: 502 },
-            ),
+        vi.fn<typeof fetch>().mockResolvedValue(
+          new Response(
+            JSON.stringify({
+              error: "AD create failed: Access is denied.\r\n",
+            }),
+            { status: 502 },
           ),
+        ),
       );
       const failed = await page.readProvisioningPage(url(id));
       expect(failed.selected).toMatchObject({
@@ -179,6 +177,49 @@ describe("persistent provisioning diagnostics", () => {
       output.mockRestore();
       errors.mockRestore();
     }
+  });
+
+  it("distinguishes delivery completion from a recorded password change without inventing activation for legacy accounts", async () => {
+    const { id, username } = await request("admin");
+    const credentials = await manual.revealManualCredentials(
+      id,
+      actorId,
+      vi.fn<typeof fetch>().mockResolvedValue(response(username)),
+    );
+    await manual.confirmManualDelivery(id, credentials.token, actorId);
+    const delivered = await page.readProvisioningPage(url(id));
+    expect(delivered.selected).toMatchObject({
+      status: "provisioned",
+      deliveryStatus: "delivered",
+      activatedAt: null,
+    });
+    const activatedAt = new Date("2026-10-22T05:10:00Z");
+    await db
+      .insert(tables.accountActivations)
+      .values({ eventId: id, activatedAt });
+    const activated = await page.readProvisioningPage(url(id));
+    expect(activated.selected).toMatchObject({
+      status: "provisioned",
+      deliveryStatus: "delivered",
+      activatedAt: activatedAt.toISOString(),
+    });
+    const legacy = await request();
+    await db
+      .update(tables.provisioningEvents)
+      .set({ status: "provisioned" })
+      .where(eq(tables.provisioningEvents.id, legacy.id));
+    const listing = await page.readProvisioningPage(url());
+    expect(listing.rows.find((row) => row.id === id)?.activatedAt).toBe(
+      activatedAt.toISOString(),
+    );
+    expect(
+      listing.rows.find((row) => row.id === legacy.id)?.activatedAt,
+    ).toBeNull();
+    // Deleting provisioning data also removes the activation receipt.
+    await db
+      .delete(tables.provisioningEvents)
+      .where(eq(tables.provisioningEvents.id, id));
+    expect(await db.select().from(tables.accountActivations)).toEqual([]);
   });
 
   it("redacts issued credentials and configured secrets from delivery failures", async () => {

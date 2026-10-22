@@ -3,6 +3,7 @@ import { and, desc, eq, ilike, or, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db";
 import {
+  accountActivations,
   provisioningEvents,
   provisioningLogs,
   signupSubmissions,
@@ -27,6 +28,7 @@ const eventFields = {
   attempts: provisioningEvents.attempts,
   deliveryMode: provisioningEvents.credentialDeliveryMode,
   deliveryStatus: provisioningEvents.credentialDeliveryStatus,
+  activatedAt: accountActivations.activatedAt,
   lastError: provisioningEvents.lastError,
   createdAt: provisioningEvents.createdAt,
   updatedAt: provisioningEvents.updatedAt,
@@ -94,6 +96,10 @@ export async function readProvisioningPage(url: URL) {
       .innerJoin(
         signupSubmissions,
         eq(provisioningEvents.submissionId, signupSubmissions.id),
+      )
+      .leftJoin(
+        accountActivations,
+        eq(accountActivations.eventId, provisioningEvents.id),
       );
   }
   function serialize(row: {
@@ -108,6 +114,7 @@ export async function readProvisioningPage(url: URL) {
     attempts: number;
     deliveryMode: "email" | "admin";
     deliveryStatus: "pending" | "delivered" | null;
+    activatedAt: Date | null;
     lastError: string | null;
     createdAt: Date;
     updatedAt: Date;
@@ -123,6 +130,7 @@ export async function readProvisioningPage(url: URL) {
       attempts: row.attempts,
       deliveryMode: row.deliveryMode,
       deliveryStatus: row.deliveryStatus,
+      activatedAt: row.activatedAt?.toISOString() ?? null,
       lastError: diagnostic(row.lastError),
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),

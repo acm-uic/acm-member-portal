@@ -179,9 +179,52 @@ After restart, `/signup` shows Link Discord, and a logged-in member sees it on
 
 ## Deploying the Windows API
 
-See `windows-api/README.md`. Briefly: a Windows Server with the RSAT AD PowerShell
-module, a `.NET 8` runtime, a service account delegated `Create/delete user objects`
-on the Members OU, and the same `WINDOWS_API_TOKEN` value as the k8s Secret.
+See `windows-api/README.md`. The API requires a domain-joined Windows Server,
+the `.NET 10` ASP.NET Core runtime, a service account with the documented AD
+delegation, and the same `WINDOWS_API_TOKEN` value as the k8s Secret. It uses
+LDAP/ADSI directly; it does not require the RSAT PowerShell module.
+
+## First-time account activation
+
+New members must visit `/activate/` before Microsoft sign-in. They enter their
+ACM username, the temporary password delivered by email or an officer, and a new
+password. The server verifies and changes the password through the Windows API;
+AD password-policy failures leave the account available for another attempt.
+The temporary password is not a usable Microsoft password when Entra Connect
+excludes passwords marked "must change at next logon". Choosing a password in AD
+clears that restriction without depending on Entra SSPR or password writeback.
+Members already signed in can continue changing their password from **Your profile**.
+
+Activation attempts are limited across portal replicas to five per username and
+100 per direct network peer in each 15-minute window. Forwarded IP headers are
+not trusted for this limit. Requests through an ingress can therefore share its
+network-peer budget. The database stores hashed limit keys and activation
+receipts, never passwords.
+
+Credential delivery, AD password activation, and Microsoft password synchronization
+are separate steps. The signup queue completes after credentials have been
+delivered, not after activation. Provisioning logs show the initial password-change
+receipt when activation succeeds through this portal. Missing receipts mean the
+change is unverified: older accounts and changes made directly in AD are not
+retroactively detected. No page probes Entra password synchronization or promises
+that Microsoft sign-in is ready. After activation, allow synchronization to run
+before signing in; if it fails, an administrator should check the per-user Entra
+Connect password-sync diagnostic.
+
+For rollout:
+
+1. Apply `0015_account_activation.sql` with the normal migration runner before
+   starting the updated portal or worker. It adds an activation receipt table and
+   leaves existing account and provisioning statuses unchanged.
+2. Deploy the compatible Windows API activation support before enabling the portal
+   activation page. Keep the API URL and shared token configured on the portal.
+3. Deploy portal and worker from the same release, pinned to an immutable image
+   digest. Verify every worker contains the email-only delivery filter. A recorded
+   activation prevents credential reissue, including stale or alternate events for
+   the same signup.
+4. Smoke-test email and manual delivery, activate a new account, confirm AD clears
+   `pwdLastSet = 0`, and verify password synchronization and Microsoft sign-in
+   separately. Production AD/Entra behavior cannot be verified by local mock tests.
 
 ## Portal status checks
 

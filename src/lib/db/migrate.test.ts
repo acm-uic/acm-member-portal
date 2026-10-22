@@ -333,6 +333,9 @@ describe("applySqlMigrations (PGlite)", () => {
 		await query('INSERT INTO "_migrations" ("name") VALUES ($1)', [
 			"0014_provisioning_logs.sql",
 		]);
+		await query('INSERT INTO "_migrations" ("name") VALUES ($1)', [
+			"0015_account_activation.sql",
+		]);
 
 		await applySqlMigrations(query, { useAdvisoryLock: false });
 
@@ -444,6 +447,7 @@ describe("applySqlMigrations (PGlite)", () => {
 			"0012_manual_credential_delivery.sql",
 			"0013_provisioning_claims.sql",
 			"0014_provisioning_logs.sql",
+			"0015_account_activation.sql",
 		]) {
 			await query('INSERT INTO "_migrations" ("name") VALUES ($1)', [name]);
 		}

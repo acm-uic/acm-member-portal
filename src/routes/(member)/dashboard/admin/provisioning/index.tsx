@@ -42,8 +42,8 @@ export default component$(() => {
       <header>
         <h1 class="font-display text-heading m-0">Provisioning logs</h1>
         <p class="text-body text-text2">
-          Track AD account setup, credential delivery, and errors for each
-          signup.
+          Track AD account setup, credential delivery, activation, and errors
+          for each signup.
         </p>
         <p class="text-caption text-text3">
           All times are Central time (America/Chicago). Updated{" "}
@@ -92,6 +92,27 @@ export default component$(() => {
                   Credential delivery:{" "}
                   {selected.deliveryMode === "email" ? "Email" : "Manual"} ·{" "}
                   {selected.deliveryStatus ?? "Delivery not recorded"}
+                </p>
+                <p class="text-body-sm text-text2 m-0">
+                  Initial password change:{" "}
+                  {selected.activatedAt ? (
+                    <>
+                      Recorded <Timestamp value={selected.activatedAt} />
+                    </>
+                  ) : (
+                    "Not recorded by the portal"
+                  )}
+                </p>
+                {!selected.activatedAt && (
+                  <p class="text-caption text-text3 m-0">
+                    A password may have been changed directly in AD or before
+                    portal activation tracking was available.
+                  </p>
+                )}
+                <p class="text-body-sm text-text2 m-0">
+                  Microsoft sign-in: synchronization is not verified by the
+                  portal. After activation, allow time for password
+                  synchronization before signing in.
                 </p>
                 <p class="text-body-sm text-text2 m-0">
                   Recorded attempt counter: {selected.attempts}. The counter
@@ -283,6 +304,14 @@ export default component$(() => {
                         <span class="block text-caption text-text3">
                           {row.deliveryMode === "email" ? "Email" : "Manual"} ·{" "}
                           {row.deliveryStatus ?? "Delivery not recorded"}
+                        </span>
+                        <span class="block text-caption text-text3">
+                          {row.activatedAt
+                            ? "Initial password change recorded"
+                            : "Initial password change not recorded"}
+                        </span>
+                        <span class="block text-caption text-text3">
+                          Microsoft sync unverified
                         </span>
                       </td>
                       <td class="py-md pr-md align-top border-t border-border text-text3">

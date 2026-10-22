@@ -7,16 +7,54 @@ their ACM passwords from their profile.
 
 ## Endpoints
 
-| Method | Path | Auth | Purpose |
-| --- | --- | --- | --- |
-| GET | `/healthz` | none | liveness |
-| POST | `/users` | Bearer | create AD user (idempotent on sAMAccountName) |
-| PATCH | `/users/{sam}` | Bearer | update AD user; `{sam}` is the current sAMAccountName |
-| GET | `/users/{sam}` | Bearer | existence check |
-| POST | `/users/{sam}/password` | Bearer | change password, verifying the current password |
+| Method | Path                    | Auth   | Purpose                                               |
+| ------ | ----------------------- | ------ | ----------------------------------------------------- |
+| GET    | `/healthz`              | none   | liveness                                              |
+| POST   | `/users`                | Bearer | create AD user (idempotent on sAMAccountName)         |
+| PATCH  | `/users/{sam}`          | Bearer | update AD user; `{sam}` is the current sAMAccountName |
+| GET    | `/users/{sam}`          | Bearer | existence check                                       |
+| POST   | `/users/{sam}/password` | Bearer | change password, verifying the current password       |
+| POST   | `/users/{sam}/activate` | Bearer | initial password change for the owning signup event   |
 
 JSON is camelCase. Required create fields: `username` (or `netid`), `firstName`,
 `lastName`, `displayName`, `email`, `eventId`. Missing any of those is `400`.
+
+### Initial account activation
+
+Deploy this Windows API **before** deploying the portal activation page. The
+portal needs migration `0015_account_activation.sql` and its configured
+`WINDOWS_API_URL` / `WINDOWS_API_TOKEN`; an older Windows API does not support
+activation. Keep the Windows API private to the portal and worker. End users
+submit credentials only to the same-origin portal `/api/activate/` endpoint.
+
+`POST /users/{sam}/activate` accepts `{ eventId, currentPassword, newPassword }`.
+It requires an enabled, fully provisioned AD account, the exact matching
+`ACM provisioning event: <eventId>` description marker, and `pwdLastSet = 0`.
+Under the existing per-account gate it calls ADSI `ChangePassword`, which
+verifies the temporary password and enforces AD policy. It never calls
+administrative `SetPassword`. Accounts already activated or created by another
+event cannot be changed through this operation. The regular signed-in
+password-change endpoint retains its current behavior.
+
+Only a confirmed change returns `{ ok: true }`. Ineligible accounts and AD
+credential/policy rejections receive the same generic HTTP 400; unexpected
+directory failures return 502 with an uncertain outcome. Passwords and directory
+exception details are not logged or returned. Neither portal nor API retries an
+uncertain password change. After uncertainty, allow synchronization and try the
+new password at Microsoft sign-in; ask support to investigate rather than
+reissuing initial credentials.
+
+The portal independently verifies approved signup, completed provisioning and
+delivered credentials, then records only a successful activation timestamp.
+It applies database-backed username and connection-address budgets before AD
+calls, so portal replicas share limits. Those records contain hashed limiter
+keys and counts, never passwords. The API additionally shares its per-account
+password-change rate limiter with activation.
+
+No activation response proves Entra synchronization or successful Microsoft
+sign-in. The applicant must allow synchronization after changing the initial
+password. Real AD behavior must be verified on a Windows deployment; the
+automated tests use fake AD accounts and mocked HTTP transport.
 
 `POST /users` body:
 
@@ -149,7 +187,7 @@ temporary password can be changed; and repeated attempts return `429`.
 - .NET 10 runtime (`dotnet --list-runtimes` → Microsoft.AspNetCore.App 10.x)
 - Service identity `ACMUIC\acmmemberportal` (see [Service account](#service-account)). Do
   not run as LocalSystem or Domain Admin. `New-ADUser` in your own PowerShell
-  session only proves *your* token can create users.
+  session only proves _your_ token can create users.
 - Firewall: allow inbound 2433 (or 443 with a cert) from the k8s cluster egress only
 - LDAP (TCP 389) from this host to the DCs. The PowerShell AD module uses ADWS
   (9389); this process uses LDAP.
@@ -167,10 +205,10 @@ members OU it manages.
    `Provisioning__UsersOu` says otherwise):
    - ADUC → the OU → Delegate Control → `ACMUIC\acmmemberportal`
    - canned task **Create, delete, and manage user accounts**
-   That grants create/delete users, reset password, and write the attributes this
-   API sets (`givenName`, `sn`, `displayName`, `mail`, `description`,
-   `employeeID`, `department`, `company`, `sAMAccountName`, `userPrincipalName`, `userAccountControl`,
-   `pwdLastSet`).
+     That grants create/delete users, reset password, and write the attributes this
+     API sets (`givenName`, `sn`, `displayName`, `mail`, `description`,
+     `employeeID`, `department`, `company`, `sAMAccountName`, `userPrincipalName`, `userAccountControl`,
+     `pwdLastSet`).
    - Add a custom delegation on the base OU and descendant OUs for **Create
      Organizational Unit objects**. The API needs this to create years under
      the base OU and months under each year OU.
@@ -183,11 +221,12 @@ members OU it manages.
    dsacls "OU=ACMUsers,DC=acmuic,DC=org"
    # look for ACMUIC\acmmemberportal (create-child user, reset password, write)
    ```
+
 4. On the Windows host, grant **Log on as a service** to `ACMUIC\acmmemberportal`
    (Local Security Policy → User Rights Assignment). `sc.exe create` / `config`
    with `obj=` often adds this; if start fails with 1069 it is missing.
 5. NTFS: the account needs Read & execute on `C:\srv\acm-provisioning`.
-6. Prove it *as that user*, not as you:
+6. Prove it _as that user_, not as you:
 
    ```powershell
    runas /user:ACMUIC\acmmemberportal powershell

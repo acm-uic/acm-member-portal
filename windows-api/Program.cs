@@ -160,6 +160,31 @@ app.MapPost("/users/{sam}/password", async Task<IResult> (string sam, ChangePass
     }
 }).RequireRateLimiting("password-change");
 
+app.MapPost("/users/{sam}/activate", async Task<IResult> (string sam, ActivateAccountRequest req, AdProvisioningService ad, HttpContext context) =>
+{
+    context.Response.Headers.CacheControl = "no-store";
+    if (string.IsNullOrWhiteSpace(sam) || sam.Length > 20 || !Guid.TryParse(req.EventId, out _)
+        || string.IsNullOrEmpty(req.CurrentPassword) || req.CurrentPassword.Length > 256
+        || string.IsNullOrEmpty(req.NewPassword) || req.NewPassword.Length > 256
+        || req.CurrentPassword == req.NewPassword)
+        return Results.BadRequest(new { error = "Activation was rejected." });
+    try
+    {
+        var activated = await ad.ActivateAccountAsync(sam, req, context.RequestAborted);
+        return activated ? Results.Ok(new { ok = true })
+            : Results.BadRequest(new { error = "Activation was rejected." });
+    }
+    catch (PasswordChangeException)
+    {
+        return Results.BadRequest(new { error = "Activation was rejected." });
+    }
+    catch
+    {
+        // A change may have applied before an error. Never log credentials or retry.
+        return Results.Json(new { error = "Activation outcome could not be confirmed." }, statusCode: 502);
+    }
+}).RequireRateLimiting("password-change");
+
 try
 {
     app.Run();

@@ -34,6 +34,7 @@ public record UpdateUserRequest(
 
 public record CreateUserResponse(string SamAccountName, bool Existed, string? OneTimePassword);
 public record ChangePasswordRequest(string CurrentPassword, string NewPassword);
+public record ActivateAccountRequest(string EventId, string CurrentPassword, string NewPassword);
 
 public class PasswordChangeException(string message) : Exception(message);
 
@@ -160,6 +161,23 @@ public sealed class AdProvisioningService
             }
         }, cancellationToken);
 
+    public Task<bool> ActivateAccountAsync(
+        string samAccountName, ActivateAccountRequest req, CancellationToken cancellationToken = default) =>
+        AdAccountCreationGate.RunAsync(samAccountName, () =>
+        {
+            using var user = FindUser(samAccountName);
+            if (user is null) return false;
+            try
+            {
+                return AdAccountActivation.Activate(new DirectoryAccount(user), req);
+            }
+            catch (Exception ex) when (AdErrors.IsPasswordRejection(ex))
+            {
+                // This unauthenticated caller must not learn account/policy details.
+                throw new PasswordChangeException("Activation was rejected.");
+            }
+        }, cancellationToken);
+
     private DirectoryEntry EnsureMonthlyUsersOu(DateTimeOffset createdAt)
     {
         var (year, month) = AdUserPlacement.OuNames(createdAt, _timeZone);
@@ -195,7 +213,7 @@ public sealed class AdProvisioningService
         }
     }
 
-    private sealed class DirectoryAccount(DirectoryEntry user) : IAdProvisioningAccount
+    private sealed class DirectoryAccount(DirectoryEntry user) : IAdProvisioningAccount, IAdActivationAccount
     {
         public int UserAccountControl => Convert.ToInt32(user.Properties["userAccountControl"].Value);
 
@@ -217,6 +235,8 @@ public sealed class AdProvisioningService
         }
 
         public void SetPassword(string password) => user.Invoke("SetPassword", password);
+        public void ChangePassword(string currentPassword, string newPassword) =>
+            user.Invoke("ChangePassword", currentPassword, newPassword);
 
         public void Enable()
         {

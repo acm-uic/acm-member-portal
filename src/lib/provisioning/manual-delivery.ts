@@ -36,6 +36,9 @@ export async function revealManualCredentials(
         WHERE signup.id = event.submission_id AND signup.status = 'approved')
       AND NOT EXISTS (SELECT 1 FROM provisioning_events AS completed
         WHERE completed.submission_id = event.submission_id AND completed.status = 'provisioned')
+      AND NOT EXISTS (SELECT 1 FROM account_activations AS activation
+        JOIN provisioning_events AS activated ON activated.id = activation.event_id
+        WHERE activated.submission_id = event.submission_id)
     RETURNING event.id, event.attempts
   `);
     if (!rows.length)

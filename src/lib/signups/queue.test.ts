@@ -133,7 +133,8 @@ describe("signup queue through AD provisioning", () => {
     const fetchImpl = vi
       .fn<typeof fetch>()
       .mockResolvedValue(credentialsResponse(row.username));
-    expect(await drainOnce(fetchImpl)).toBe(false);
+    for (let attempt = 0; attempt < 3; attempt++)
+      expect(await drainOnce(fetchImpl)).toBe(false);
     expect(await queue.loadSignupQueue(false)).toMatchObject([
       { id: row.id, manualCredentialsReady: false },
     ]);
@@ -162,10 +163,20 @@ describe("signup queue through AD provisioning", () => {
     expect(JSON.stringify(await queue.loadSignupQueue(false))).not.toContain(
       result.token,
     );
-    expect(await drainOnce(fetchImpl)).toBe(false);
+    for (let attempt = 0; attempt < 3; attempt++)
+      expect(await drainOnce(fetchImpl)).toBe(false);
     expect(
       await manual.confirmManualDelivery(id, crypto.randomUUID(), actorId),
     ).toBe(false);
+    const [awaitingReceipt] = await db
+      .select()
+      .from(tables.provisioningEvents)
+      .where(eq(tables.provisioningEvents.id, id));
+    expect(awaitingReceipt).toMatchObject({
+      status: "pending",
+      credentialDeliveryStatus: "pending",
+      credentialRevealToken: result.token,
+    });
     expect(await manual.confirmManualDelivery(id, result.token, actorId)).toBe(
       true,
     );
@@ -177,6 +188,56 @@ describe("signup queue through AD provisioning", () => {
       manual.revealManualCredentials(id, actorId, fetchImpl),
     ).rejects.toMatchObject({ status: 409 });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("never resets activated credentials through manual reveal, queued email, retry, or a stale claim", async () => {
+    const { row, id } = await manualEvent();
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(credentialsResponse(row.username));
+    const credentials = await manual.revealManualCredentials(
+      id,
+      actorId,
+      fetchImpl,
+    );
+    await manual.confirmManualDelivery(id, credentials.token, actorId);
+    const stale = await event(row.id, "pending", {
+      credentialDeliveryMode: "email",
+    });
+    const claim = (await outbox.claimNext())!;
+    expect(claim.id).toBe(stale.id);
+    const activatedAt = new Date();
+    await db
+      .insert(tables.accountActivations)
+      .values({ eventId: id, activatedAt });
+    fetchImpl.mockClear();
+    await expect(
+      manual.revealManualCredentials(id, actorId, fetchImpl),
+    ).rejects.toMatchObject({ status: 409 });
+    const externalOperation = vi.fn();
+    expect(
+      await outbox.withProvisioningClaim(claim, externalOperation),
+    ).toEqual({ owned: false });
+    expect(externalOperation).not.toHaveBeenCalled();
+    await db
+      .update(tables.provisioningEvents)
+      .set({ status: "failed", updatedAt: new Date(0) })
+      .where(eq(tables.provisioningEvents.id, stale.id));
+    expect(await outbox.retryProvisioning(stale.id)).toBe(false);
+    expect(await drainOnce(fetchImpl)).toBe(false);
+    // Even an inconsistent/manual retry must not reset an activated account.
+    await db
+      .update(tables.provisioningEvents)
+      .set({ status: "failed", credentialDeliveryStatus: "pending" })
+      .where(eq(tables.provisioningEvents.id, id));
+    await expect(
+      manual.revealManualCredentials(id, actorId, fetchImpl),
+    ).rejects.toMatchObject({ status: 409 });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(sendCredentialEmail).not.toHaveBeenCalled();
+    expect(await db.select().from(tables.accountActivations)).toMatchObject([
+      { eventId: id, activatedAt },
+    ]);
   });
 
   it("uses the displayed manual password for login before and after confirmation", async () => {

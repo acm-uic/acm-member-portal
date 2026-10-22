@@ -104,11 +104,14 @@ export async function claimNext(): Promise<ClaimedProvisioningEvent | null> {
         attempts = CASE WHEN status = 'processing' THEN attempts + 1 ELSE attempts END,
         updated_at = now()
     WHERE id = (
-      SELECT id FROM provisioning_events
+      SELECT id FROM provisioning_events AS candidate
       WHERE credential_delivery_mode = 'email' AND (
         (status IN ('pending', 'failed') AND next_attempt_at <= now())
         OR (status = 'processing' AND updated_at < now() - interval '5 minutes')
       )
+      AND NOT EXISTS (SELECT 1 FROM account_activations AS activation
+        JOIN provisioning_events AS activated ON activated.id = activation.event_id
+        WHERE activated.submission_id = candidate.submission_id)
       ORDER BY next_attempt_at
       LIMIT 1
       FOR UPDATE SKIP LOCKED
@@ -150,9 +153,12 @@ export async function withProvisioningClaim<T>(
 ): Promise<{ owned: true; value: T } | { owned: false }> {
 	return db.transaction(async (tx) => {
 		const { rows } = await tx.execute(sql`
-      SELECT id FROM provisioning_events
+      SELECT id FROM provisioning_events AS candidate
       WHERE id = ${event.id}::uuid AND status = 'processing'
         AND claim_token = ${event.claimToken}::uuid
+        AND NOT EXISTS (SELECT 1 FROM account_activations AS activation
+          JOIN provisioning_events AS activated ON activated.id = activation.event_id
+          WHERE activated.submission_id = candidate.submission_id)
       FOR UPDATE
     `);
 		if (!rows.length) return { owned: false };
@@ -262,6 +268,9 @@ export async function retryProvisioning(id: string): Promise<boolean> {
 					eq(provisioningEvents.id, id),
 					eq(provisioningEvents.credentialDeliveryMode, "email"),
 					inArray(provisioningEvents.status, ["failed", "dead_lettered"]),
+					sql`NOT EXISTS (SELECT 1 FROM account_activations AS activation
+            JOIN provisioning_events AS activated ON activated.id = activation.event_id
+            WHERE activated.submission_id = ${provisioningEvents.submissionId})`,
 				),
 			)
 			.returning({ id: provisioningEvents.id });

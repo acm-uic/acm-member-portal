@@ -29,6 +29,13 @@ export default component$(() => {
 						Log in
 					</Link>
 				</div>
+				<p class="text-text2 text-body-sm m-0">
+					Received a temporary password?{" "}
+					<Link href="/activate/" class="text-accent underline">
+						Activate your account
+					</Link>{" "}
+					and choose your password before Microsoft sign-in.
+				</p>
 			</div>
 		</main>
 	);
