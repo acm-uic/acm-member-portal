@@ -83,7 +83,11 @@ export const StaffOverview = component$<{
 		)}
 
 		<section class="grid grid-cols-1 lg:grid-cols-[1.5fr_1fr] gap-md">
-			<Panel title="Chapter growth" meta={`${CHART_WEEKS}-week new members`}>
+			<Panel
+				title="Chapter growth"
+				meta={`${CHART_WEEKS}-week new members`}
+				titleHelp="Each bar counts new portal member profiles created at first login in a rolling 7-day period, regardless of provisioning status. Counts are per period, not cumulative. Signup submissions and provisioned accounts that have not logged in are not counted. The rightmost bar covers the last 7 days."
+			>
 				<ParticipationChart
 					bars={props.bars}
 					startLabel="20 weeks ago"
