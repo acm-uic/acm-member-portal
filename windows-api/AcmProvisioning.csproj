@@ -14,7 +14,7 @@
          looks for built-in modules under the publish folder, not $PSHOME). -->
     <PackageReference Include="System.DirectoryServices" Version="10.0.13" />
     <!-- SCM lifetime so sc.exe start can handshake (error 1053 without this) -->
-    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.13" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.14" />
   </ItemGroup>
 
 </Project>
