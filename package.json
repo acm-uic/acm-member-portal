@@ -24,7 +24,7 @@
     "@better-auth/drizzle-adapter": "1.7.12",
     "@builder.io/qwik": "1.20.2",
     "@builder.io/qwik-city": "1.20.1",
-    "@electric-sql/pglite": "^0.5.11",
+    "@electric-sql/pglite": "^0.5.12",
     "better-auth": "1.7.12",
     "drizzle-orm": "^0.45.2",
     "fastify": "^5.12.3",
