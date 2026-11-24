@@ -255,7 +255,36 @@ describe("profile username claims", () => {
       expect.objectContaining({
         samAccountName: member.username,
         username: input.username,
+        email: input.email,
       }),
     );
+    const [saved] = await db.select().from(tables.user);
+    expect(saved).toMatchObject({
+      email: input.email,
+      emailVerified: false,
+      entraSyncedEmail: member.email,
+    });
+  });
+
+  it("does not send the old email to AD when a form was opened before reconciliation", async () => {
+    const syncedEmail = "synced@example.com";
+    await db
+      .update(tables.user)
+      .set({ email: syncedEmail, entraSyncedEmail: syncedEmail });
+    const result = await saveProfile(
+      {
+        ...input,
+        username: member.username,
+        email: member.email,
+        _originalEmail: member.email,
+      },
+      session,
+    );
+    expect(result).toMatchObject({ ok: true });
+    expect(syncAdUser).toHaveBeenCalledWith(
+      expect.objectContaining({ email: undefined }),
+    );
+    const [saved] = await db.select().from(tables.user);
+    expect(saved?.email).toBe(syncedEmail);
   });
 });

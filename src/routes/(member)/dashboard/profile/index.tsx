@@ -234,6 +234,11 @@ export default component$(() => {
         class="grid gap-md"
         noValidate
       >
+        <input
+          type="hidden"
+          name="_originalEmail"
+          value={String(profile.value.answers.email ?? "")}
+        />
         {profile.value.fields.map((field) => {
           const raw = profile.value.answers[field.key];
           const value = (Array.isArray(raw) ? raw : String(raw ?? "")) as

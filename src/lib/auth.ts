@@ -11,7 +11,7 @@ import {
   verification,
 } from "./db/schema.ts";
 import { bootstrapUser } from "./auth-bootstrap.ts";
-import { mapMicrosoftProfileToUser } from "./microsoft-profile.ts";
+import { microsoftWithEmailReconciliation } from "./microsoft-email.ts";
 import {
   DISCORD_PROVIDER_ID,
   DISCORD_SCOPES,
@@ -85,6 +85,7 @@ export const auth = betterAuth({
     },
     accountLinking: {
       enabled: true,
+      disableImplicitLinking: true,
       trustedProviders: microsoftConfigured ? ["microsoft"] : [],
       allowDifferentEmails: true,
     },
@@ -92,14 +93,13 @@ export const auth = betterAuth({
   socialProviders: {
     ...(microsoftConfigured
       ? {
-          microsoft: {
+          microsoft: microsoftWithEmailReconciliation(db, {
             clientId: process.env.MICROSOFT_CLIENT_ID!,
             clientSecret: process.env.MICROSOFT_CLIENT_SECRET!,
             tenantId: process.env.MICROSOFT_TENANT_ID!,
             prompt: "select_account" as const,
             disableProfilePhoto: true,
-            mapProfileToUser: mapMicrosoftProfileToUser,
-          },
+          }),
         }
       : {}),
     ...(discordConfigured
