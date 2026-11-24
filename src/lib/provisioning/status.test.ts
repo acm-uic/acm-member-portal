@@ -35,7 +35,9 @@ describe("Windows API diagnostics", () => {
         inspection: {
           state: "export-error",
           targetDn: "CN={1234}",
-          errorCode: "AttributeValueMustBeUnique",
+          errorCode: "dn-attributes-failure",
+          technicalMessage:
+            'Correct the duplicate SMTP address shared@example.org. Trace auth=private-token and token="upstream-secret".',
           conflictAttribute: "ProxyAddresses",
           conflictValue: "shared@example.org",
           conflictObjectId: "de25bfb1-ba24-4c2c-9e6d-78af2bb35f42",
@@ -53,6 +55,9 @@ describe("Windows API diagnostics", () => {
       details: {
         inspection: {
           state: "export-error",
+          errorCode: "dn-attributes-failure",
+          technicalMessage:
+            "Correct the duplicate SMTP address shared@example.org. Trace auth=[redacted] and token=[redacted].",
           conflictAttribute: "ProxyAddresses",
           conflictValue: "shared@example.org",
         },
@@ -60,6 +65,7 @@ describe("Windows API diagnostics", () => {
       },
     });
     expect(JSON.stringify(result)).not.toContain("sensitive detail");
+    expect(JSON.stringify(result)).not.toContain("upstream-secret");
     expect(fetchMock).toHaveBeenCalledWith(
       "https://windows.test/api/users/alice/entra-sync",
       expect.objectContaining({
@@ -68,6 +74,36 @@ describe("Windows API diagnostics", () => {
         redirect: "error",
       }),
     );
+  });
+
+  it("still reports an export error when an older Windows deployment omits the technical message", async () => {
+    fetchMock.mockResolvedValue(
+      Response.json({
+        samAccountName: "alice",
+        account: {
+          distinguishedName: "CN=alice,DC=example,DC=org",
+          userPrincipalName: null,
+        },
+        retries: { enabled: true, directory: null, userHash: null },
+        inspection: {
+          state: "export-error",
+          targetDn: "CN={1234}",
+          errorCode: null,
+          conflictAttribute: null,
+          conflictValue: null,
+          conflictObjectId: null,
+          passwordStatus: null,
+          passwordCheckedAt: null,
+        },
+        inspectionFailure: null,
+      }),
+    );
+    expect(await lookupEntraSync("alice", fetchMock)).toMatchObject({
+      ok: true,
+      details: {
+        inspection: { state: "export-error", technicalMessage: null },
+      },
+    });
   });
 
   it("keeps AD absence, old Windows deployments, and an invalid backend response distinct", async () => {

@@ -103,13 +103,31 @@ try {
     )
     $state.Target = [pscustomobject]@{
         HasExportError = $true; HasSyncError = $false
-        ExportError = 'Unable to update this object [ProxyAddresses <pii>SMTP:shared@example.org</pii>]. ExtraErrorDetails: [{"Key":"ObjectIdInConflict","Value":["de25bfb1-ba24-4c2c-9e6d-78af2bb35f42"]},{"Key":"AttributeConflictName","Value":["ProxyAddresses"]},{"Key":"AttributeConflictValues","Value":["SMTP:shared@example.org"]}]. Unrelated detail: private@example.org'
+        ExportError = [pscustomobject]@{
+            ErrorType = 'dn-attributes-failure'; ErrorName = 'AttributeValueMustBeUnique'; ErrorCode = '0x8023134a'
+            ErrorLiteral = 'Unable to update this object [ProxyAddresses <pii>SMTP:shared@example.org</pii>]. Correct the duplicate in the source directory. token="credential-sentinel"'
+            ErrorExtraDetails = @'
+[
+  {"Key":"ObjectIdInConflict","Value":["de25bfb1-ba24-4c2c-9e6d-78af2bb35f42"]},
+  {"Key":"AttributeConflictName","Value":["ProxyAddresses"]},
+  {"Key":"AttributeConflictValues","Value":["SMTP:shared@example.org"]},
+  {"Key":"UnrelatedDetail","Value":["private@example.org"]}
+]
+'@
+        }
     }
     $result = Get-AcmEntraSyncInspection -DistinguishedName $dn
-    Assert-True ($result.State -eq 'export-error' -and $result.ErrorCode -eq 'duplicate-attribute' -and $result.TargetDn -eq 'CN={1234}') 'Follow the metaverse to the Entra export error.'
+    Assert-True ($result.State -eq 'export-error' -and $result.ErrorCode -eq 'AttributeValueMustBeUnique' -and $result.TargetDn -eq 'CN={1234}') 'Follow the metaverse to the structured Entra export error.'
+    Assert-True ($result.TechnicalMessage -eq 'Unable to update this object [ProxyAddresses SMTP:shared@example.org]. Correct the duplicate in the source directory. token=[redacted]') 'Show the vendor literal with credentials redacted.'
     Assert-True ($result.ConflictAttribute -eq 'ProxyAddresses' -and $result.ConflictValue -eq 'shared@example.org' -and $result.ConflictObjectId -eq 'de25bfb1-ba24-4c2c-9e6d-78af2bb35f42') 'Expose the structured duplicate-attribute details.'
     Assert-True ($result.PasswordStatus -eq 'TargetNotExportedToDirectory' -and $result.PasswordCheckedAt) 'Report the last password status separately.'
     Assert-True (($result | ConvertTo-Json) -notmatch 'private@example.org') 'The raw export error must not cross the process boundary.'
+    $state.Target.ExportError = [pscustomobject]@{
+        ErrorType = 'large-object'; ErrorName = ''; ErrorCode = '0x8023134a'
+        ErrorLiteral = 'The object is too large to export.'; ErrorExtraDetails = '<non-json />'
+    }
+    $result = Get-AcmEntraSyncInspection -DistinguishedName $dn
+    Assert-True ($result.ErrorCode -eq '0x8023134a' -and $result.TechnicalMessage -eq 'The object is too large to export.' -and -not $result.ConflictAttribute) 'Show non-duplicate errors even when extra details are unavailable.'
     $state.LogUnavailable = $true
     $state.Target.HasExportError = $false
     $result = Get-AcmEntraSyncInspection -DistinguishedName $dn

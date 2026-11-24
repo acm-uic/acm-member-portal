@@ -38,7 +38,7 @@ internal sealed class EntraSyncFailure(string code) : Exception("Entra sync requ
 
 public sealed record EntraConnectorInspection(string State, string? TargetDn = null,
     string? ErrorCode = null, string? ConflictAttribute = null, string? ConflictValue = null, Guid? ConflictObjectId = null,
-    string? PasswordStatus = null, DateTimeOffset? PasswordCheckedAt = null);
+    string? PasswordStatus = null, DateTimeOffset? PasswordCheckedAt = null, string? TechnicalMessage = null);
 
 public sealed class PowerShellEntraSyncRunner(EntraSyncOptions options) : IEntraSyncRunner
 {
@@ -94,7 +94,7 @@ public sealed class PowerShellEntraSyncRunner(EntraSyncOptions options) : IEntra
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
         process.Start();
-        // Only inspection returns an allowlisted JSON projection. Raw errors are always discarded.
+        // Inspection returns a bounded projection of the connector record. Process errors stay private.
         var stdout = ReadOutputAsync(process, inspect, timeout.Token);
         var stderr = process.StandardError.BaseStream.CopyToAsync(Stream.Null);
         try
@@ -132,7 +132,7 @@ public sealed class PowerShellEntraSyncRunner(EntraSyncOptions options) : IEntra
             return "";
         }
 
-        var buffer = new char[8193];
+        var buffer = new char[32769];
         var count = await process.StandardOutput.ReadBlockAsync(buffer.AsMemory(), cancellationToken);
         if (count == buffer.Length)
             throw new InvalidDataException("Entra sync diagnostics exceeded the response limit.");
