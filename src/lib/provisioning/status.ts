@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { sanitizeProvisioningError } from "./diagnostics";
 
 export interface HealthCheckResult {
   ok: boolean;
@@ -102,10 +103,9 @@ const entraSyncResponse = z.object({
       targetDn: z.string().max(4096).nullable(),
       errorCode: z
         .string()
-        .regex(
-          /^(?:QuarantinedAttributeValueMustBeUnique|AttributeValueMustBeUnique|InvalidSoftMatch|ObjectTypeMismatch|InvalidHardMatch|InvalidAttributeValue|LargeObject|permission-issue|duplicate-attribute)$/i,
-        )
+        .regex(/^[a-z0-9][a-z0-9._-]{0,79}$/i)
         .nullable(),
+      technicalMessage: z.string().max(2000).nullable().default(null),
       conflictAttribute: z
         .string()
         .regex(
@@ -188,6 +188,10 @@ export async function lookupEntraSync(
       );
 
     const details = parsed.data;
+    if (details.inspection?.technicalMessage) {
+      details.inspection.technicalMessage =
+        sanitizeProvisioningError(details.inspection.technicalMessage) || null;
+    }
     return {
       ok: true,
       httpStatus,

@@ -52,23 +52,58 @@ function Request-AcmEntraSync {
     }
 }
 
+function Get-AcmExportMessage([string]$Literal) {
+    # Keep the vendor message. Additional diagnostic JSON is handled as structured fields.
+    $detailsStart = $Literal.IndexOf('ExtraErrorDetails:', [StringComparison]::OrdinalIgnoreCase)
+    if ($detailsStart -ge 0) { $Literal = $Literal.Substring(0, $detailsStart) }
+    $message = $Literal -replace '</?pii>', '' -replace '[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', ''
+    $message = $message -replace '\bBearer\s+[^\s"''\\,}]+', 'Bearer [redacted]'
+    $message = $message -replace '(\b(?:unicodePwd|userPassword|currentPassword|newPassword|oneTimePassword|passwordHash|password|clientSecret|token)\b["'']?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|''[^'']*''|[^\s,;}]+)', '$1[redacted]'
+    $message = $message.Trim()
+    if ($message.Length -gt 2000) { return $message.Substring(0, 1999) + [char]0x2026 }
+    if ($message) { return $message }
+}
+
 function Add-AcmExportError($Result, $ExportError) {
-    # Return only recognized error codes and conflict metadata. The full error may contain personal data.
-    $text = [string]$ExportError
-    if ($text -match '\b(QuarantinedAttributeValueMustBeUnique|AttributeValueMustBeUnique|InvalidSoftMatch|ObjectTypeMismatch|InvalidHardMatch|InvalidAttributeValue|LargeObject|permission-issue)\b') {
+    # ADSync returns an ExportError object. Its string conversion does not include the vendor details.
+    $literal = if ($ExportError -is [string]) { $ExportError } else { [string]$ExportError.ErrorLiteral }
+    $Result.TechnicalMessage = Get-AcmExportMessage $literal
+    $Result.ErrorCode = @($ExportError.ErrorName, $ExportError.ErrorCode, $ExportError.ErrorType) |
+        Where-Object { $_ -match '^[a-z0-9][a-z0-9._-]{0,79}$' } | Select-Object -First 1
+    if (-not $Result.ErrorCode -and $literal -match '\b(QuarantinedAttributeValueMustBeUnique|AttributeValueMustBeUnique|InvalidSoftMatch|ObjectTypeMismatch|InvalidHardMatch|InvalidAttributeValue|LargeObject|permission-issue)\b') {
         $Result.ErrorCode = $Matches[1]
     }
-    if ($text -match '(?:AttributeConflictName[^\r\n]{0,100}|\[)\b(ProxyAddresses|UserPrincipalName|OnPremiseSecurityIdentifier|OnPremisesSecurityIdentifier|mail)\b') {
-        $Result.ConflictAttribute = $Matches[1]
-        if (-not $Result.ErrorCode) { $Result.ErrorCode = 'duplicate-attribute' }
+
+    $conflict = @{}
+    $extra = [string]$ExportError.ErrorExtraDetails
+    if ($extra -and $extra.Length -le 65536) {
+        try {
+            foreach ($entry in ($extra | ConvertFrom-Json -ErrorAction Stop)) {
+                if ($entry.Key -in @('AttributeConflictName', 'AttributeConflictValues', 'ObjectIdInConflict')) {
+                    $conflict[$entry.Key] = [string](@($entry.Value)[0])
+                }
+            }
+        } catch { } # The vendor can return non-JSON details. Keep the technical message.
     }
-    if ($text -match 'ObjectIdInConflict[^\r\n]{0,80}?([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\b') {
+
+    $attribute = '(ProxyAddresses|UserPrincipalName|OnPremises?SecurityIdentifier|mail)'
+    if ($conflict.AttributeConflictName -match ('^' + $attribute + '$')) {
+        $Result.ConflictAttribute = $Matches[1]
+    } elseif ($literal -match ('(?:AttributeConflictName[^\r\n]{0,100}|\[)\b' + $attribute + '\b')) {
+        $Result.ConflictAttribute = $Matches[1]
+    }
+    if ($Result.ConflictAttribute -and -not $Result.ErrorCode) { $Result.ErrorCode = 'duplicate-attribute' }
+
+    $objectId = '([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})'
+    if ($conflict.ObjectIdInConflict -match ('^' + $objectId + '$') `
+        -or $literal -match ('ObjectIdInConflict[^\r\n]{0,80}?' + $objectId + '\b')) {
         $Result.ConflictObjectId = $Matches[1]
     }
     if ($Result.ConflictAttribute -in @('ProxyAddresses', 'UserPrincipalName', 'mail')) {
         $address = '([a-z0-9.!#$%&*+/=?^_{|}~\-]+@[a-z0-9.\-]+\.[a-z0-9\-]+)'
-        if ($text -match ('AttributeConflictValues[^\r\n]{0,100}?(?:SMTP:|["\x27])' + $address) `
-            -or ($Result.ConflictAttribute -eq 'ProxyAddresses' -and $text -match ('ProxyAddresses[^\r\n]{0,80}?SMTP:' + $address))) {
+        if ($conflict.AttributeConflictValues -match ('^(?:SMTP:)?' + $address + '$') `
+            -or $literal -match ('AttributeConflictValues[^\r\n]{0,100}?(?:SMTP:|["\x27])' + $address) `
+            -or ($Result.ConflictAttribute -eq 'ProxyAddresses' -and $literal -match ('ProxyAddresses[^\r\n]{0,80}?SMTP:' + $address))) {
             if ($Matches[1].Length -le 254) { $Result.ConflictValue = $Matches[1] }
         }
     }
@@ -81,7 +116,7 @@ function Get-AcmEntraSyncInspection([string]$DistinguishedName) {
     try { Import-Module ADSync -ErrorAction Stop } catch { Stop-AcmEntraSync 11 }
 
     $result = @{
-        State = 'ad-not-imported'; TargetDn = $null; ErrorCode = $null
+        State = 'ad-not-imported'; TargetDn = $null; ErrorCode = $null; TechnicalMessage = $null
         ConflictAttribute = $null; ConflictValue = $null; ConflictObjectId = $null
         PasswordStatus = $null; PasswordCheckedAt = $null
     }

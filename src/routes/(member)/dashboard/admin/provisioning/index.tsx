@@ -182,6 +182,20 @@ const EntraDiagnostics = component$<{ username?: string }>(({ username }) => {
                           Error code <code>{inspection.errorCode}</code>
                         </p>
                       )}
+                      {inspection?.technicalMessage ? (
+                        <div class="grid gap-2xs">
+                          <p class="text-label m-0">Entra Connect message</p>
+                          <pre class="m-0 text-error font-mono whitespace-pre-wrap break-words">
+                            {inspection.technicalMessage}
+                          </pre>
+                        </div>
+                      ) : inspection?.state === "export-error" ? (
+                        <p class="m-0">
+                          Open this connector object’s Export Error tab in
+                          Synchronization Service Manager for the vendor
+                          message.
+                        </p>
+                      ) : null}
                       {inspection?.conflictAttribute && (
                         <p class="m-0">
                           Conflicting attribute{" "}
@@ -206,7 +220,9 @@ const EntraDiagnostics = component$<{ username?: string }>(({ username }) => {
                           which account should own the value before correcting
                           it in the source directory. For an SMTP conflict,
                           check both AD <code>mail</code> and{" "}
-                          <code>proxyAddresses</code>.{" "}
+                          <code>proxyAddresses</code>. Entra can use{" "}
+                          <code>mail</code> as the SMTP address when{" "}
+                          <code>proxyAddresses</code> is empty.{" "}
                           <a
                             class="text-accent"
                             href="https://learn.microsoft.com/en-us/entra/identity/hybrid/connect/how-to-connect-health-diagnose-sync-errors"
