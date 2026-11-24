@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, ne, sql } from "drizzle-orm";
 import { db } from "../db";
 import {
   auditEvents,
@@ -83,6 +83,25 @@ export async function saveProfile(
     return { ok: false as const, errors: { email: "Account was not found." } };
   }
 
+  const emailConflict = {
+    ok: false as const,
+    errors: {
+      email:
+        "Your email changed since you opened this form. Reload and try again.",
+    },
+  };
+  const originalEmail = data._originalEmail;
+  const submittedEmail =
+    base.email === originalEmail ? current.email : base.email.toLowerCase();
+  const emailChanged = submittedEmail !== current.email;
+  if (
+    emailChanged &&
+    typeof originalEmail === "string" &&
+    originalEmail !== current.email
+  ) {
+    return emailConflict;
+  }
+
   const [profile] = await db
     .select({
       answers: memberProfiles.answers,
@@ -91,16 +110,23 @@ export async function saveProfile(
     .where(eq(memberProfiles.userId, session.user.id))
     .limit(1);
 
-  const [emailTaken] = await db
-    .select({ id: user.id })
-    .from(user)
-    .where(eq(user.email, base.email))
-    .limit(1);
-  if (emailTaken && emailTaken.id !== session.user.id) {
-    return {
-      ok: false as const,
-      errors: { email: "This email is already in use." },
-    };
+  if (emailChanged) {
+    const [emailTaken] = await db
+      .select({ id: user.id })
+      .from(user)
+      .where(
+        and(
+          sql`lower(${user.email}) = ${submittedEmail}`,
+          ne(user.id, current.id),
+        ),
+      )
+      .limit(1);
+    if (emailTaken) {
+      return {
+        ok: false as const,
+        errors: { email: "This email is already in use." },
+      };
+    }
   }
 
   const [usernameTaken] = await db
@@ -144,18 +170,22 @@ export async function saveProfile(
     netid: base.netid,
     username: base.username,
     uin: base.uin,
-    email: base.email,
+    email: submittedEmail,
     ...answers,
   });
   const changes = changedFields(before, after);
 
   try {
-    await db.transaction(async (tx) => {
-      await tx
+    const saved = await db.transaction(async (tx) => {
+      const [updated] = await tx
         .update(user)
         .set({
           name: displayName,
-          email: base.email,
+          ...(emailChanged && {
+            email: submittedEmail,
+            emailVerified: false,
+            entraSyncedEmail: sql`coalesce(${user.entraSyncedEmail}, ${user.email})`,
+          }),
           netid: base.netid,
           username: base.username,
           uin: base.uin,
@@ -165,7 +195,14 @@ export async function saveProfile(
           displayName,
           updatedAt: new Date(),
         })
-        .where(eq(user.id, session.user.id));
+        .where(
+          and(
+            eq(user.id, current.id),
+            emailChanged ? eq(user.email, current.email) : undefined,
+          ),
+        )
+        .returning({ id: user.id });
+      if (!updated) return false;
       await tx
         .update(memberProfiles)
         .set({
@@ -183,7 +220,9 @@ export async function saveProfile(
           after: { ...after, changes },
         });
       }
+      return true;
     });
+    if (!saved) return emailConflict;
   } catch (error) {
     // Return the field error only after the transaction has rolled back.
     const errors = signupUsernameConflictErrors(error);
@@ -195,6 +234,10 @@ export async function saveProfile(
   if (changes.length) {
     const previousSam = current.username || current.netid;
     if (previousSam) {
+      const retryEmail =
+        base.email === current.email &&
+        current.entraSyncedEmail !== null &&
+        current.entraSyncedEmail !== current.email;
       const ad = await syncAdUser({
         samAccountName: previousSam,
         username: base.username,
@@ -202,7 +245,7 @@ export async function saveProfile(
         lastName: base.last_name,
         preferredName: preferred ?? undefined,
         displayName,
-        email: base.email,
+        email: emailChanged || retryEmail ? submittedEmail : undefined,
         uin: base.uin,
       });
       if (!ad.ok) adWarning = ad.error;
