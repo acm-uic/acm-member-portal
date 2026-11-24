@@ -189,8 +189,33 @@ public sealed class EntraSyncTests : IDisposable
         {
             Assert.Null(queue.Due(DateTimeOffset.UtcNow));
             Assert.Equal(1, queue.Due(Future)!.Attempts);
+            Assert.Equal("request-failed", queue.Inspect(Dn).UserHash?.FailureCode);
         }
-        else Assert.Null(queue.Due(Future));
+        else
+        {
+            Assert.Null(queue.Due(Future));
+            Assert.Null(queue.Inspect(Dn).UserHash);
+        }
+    }
+
+    [Fact]
+    public void DiagnosticsSeparateSharedDirectoryWorkFromTheRequestedAccount()
+    {
+        var now = DateTimeOffset.UtcNow;
+        using (var queue = new EntraSyncQueue(Options))
+        {
+            queue.Enqueue(EntraSyncKind.Directory);
+            queue.Finish(queue.Due(Future)!, false, now, "directory-busy");
+            queue.Enqueue(EntraSyncKind.UserHash, Dn);
+            var job = queue.Due(now.AddSeconds(1))!;
+            queue.Finish(job, false, now, "adsync-command-failed");
+        }
+        using var restored = new EntraSyncQueue(Options);
+        var result = restored.Inspect(Dn.ToUpperInvariant());
+        Assert.Equal("directory-busy", result.Directory?.FailureCode);
+        Assert.Equal("adsync-command-failed", result.UserHash?.FailureCode);
+        Assert.Equal(1, result.UserHash?.Attempts);
+        Assert.Null(restored.Inspect("CN=Other,OU=ACMUsers,DC=acmuic,DC=org").UserHash);
     }
 
     [Fact]

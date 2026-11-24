@@ -407,6 +407,23 @@ and [password synchronization](https://learn.microsoft.com/en-us/entra/identity/
 
 ### Troubleshoot synchronization and sign-in
 
+In the portal, open **Admin → Provisioning logs → Entra sync diagnostics**.
+Enter the ACM username or open its provisioning log to prefill it. The lookup
+requires `admin.access` and `signups.review` and reads one account at a time.
+It shows the connected directory object, current export error, recognized
+conflict fields, latest available password hash result, and outstanding sync
+requests. The directory request is shared. Only the password hash request in
+this view belongs to the selected AD account. Use its job ID to match the
+worker warning in Event Viewer.
+
+Deploy the updated Windows API and portal for this view. The API uses the
+configured AD connector and the service identity's ADSync read access. For
+an unavailable result, verify under that identity that `Get-ADSyncCSObject`,
+`Get-ADSyncMVObject`, and `Get-ADSyncCSObjectLog` can read a test account.
+The diagnostic lookup does not start a sync or modify attributes. A linked
+Entra connector record is evidence about Connect's local state. Check Entra
+for the actual cloud account and sign-in name.
+
 Use **Event Viewer → Windows Logs → Application**. API worker entries use source
 `AcmProvisioning` and category `AcmProvisioning.EntraSyncWorker`; Connect entries
 use sources such as `Directory Synchronization` and `ADSync`. Include Information

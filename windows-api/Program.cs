@@ -35,7 +35,8 @@ builder.Services.AddSingleton(entraSync);
 builder.Services.AddSingleton<EntraSyncQueue>();
 builder.Services.AddSingleton<IEntraSyncQueue>(services => services.GetRequiredService<EntraSyncQueue>());
 builder.Services.AddSingleton<AdSyncNotifications>();
-builder.Services.AddSingleton<IEntraSyncRunner, PowerShellEntraSyncRunner>();
+builder.Services.AddSingleton<PowerShellEntraSyncRunner>();
+builder.Services.AddSingleton<IEntraSyncRunner>(services => services.GetRequiredService<PowerShellEntraSyncRunner>());
 builder.Services.AddHostedService<EntraSyncWorker>();
 builder.Services.AddSingleton<AdProvisioningService>();
 builder.Services.AddRateLimiter(options =>
@@ -48,12 +49,21 @@ builder.Services.AddRateLimiter(options =>
             Window = TimeSpan.FromMinutes(1),
             QueueLimit = 0
         }));
+    options.AddConcurrencyLimiter("entra-inspection", limiter =>
+    {
+        limiter.PermitLimit = 2;
+        limiter.QueueLimit = 0;
+    });
     options.OnRejected = async (context, cancellationToken) =>
     {
         context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
         context.HttpContext.Response.Headers.RetryAfter = "60";
-        await context.HttpContext.Response.WriteAsJsonAsync(
-            new { error = "Too many password change attempts. Wait a minute and try again." }, cancellationToken);
+        var inspection = context.HttpContext.Request.Path.Value?.EndsWith("/entra-sync", StringComparison.OrdinalIgnoreCase) == true;
+        await context.HttpContext.Response.WriteAsJsonAsync(new
+        {
+            error = inspection ? "Entra sync diagnostics are busy. Try again shortly."
+                : "Too many password change attempts. Wait a minute and try again."
+        }, cancellationToken);
     };
 });
 var app = builder.Build();
@@ -142,6 +152,38 @@ app.MapGet("/users/{sam}", async Task<IResult> (string sam, AdProvisioningServic
         return AdFailure(ex);
     }
 });
+
+app.MapGet("/users/{sam}/entra-sync", async Task<IResult> (string sam, AdProvisioningService ad,
+    EntraSyncQueue queue, PowerShellEntraSyncRunner runner, HttpContext context) =>
+{
+    context.Response.Headers.CacheControl = "no-store";
+    if (string.IsNullOrWhiteSpace(sam) || sam.Length > 64 || sam is "." or ".."
+        || sam.Any(c => char.IsControl(c) || c is '/' or '\\'))
+        return Results.BadRequest();
+
+    var cancellationToken = context.RequestAborted;
+    AdSyncAccount? account;
+    EntraSyncRetries? retries;
+    try
+    {
+        account = await ad.GetSyncAccountAsync(sam, cancellationToken);
+        retries = account is null ? null : queue.Inspect(account.DistinguishedName);
+    }
+    catch when (!cancellationToken.IsCancellationRequested)
+    {
+        return Results.StatusCode(StatusCodes.Status502BadGateway);
+    }
+
+    EntraConnectorInspection? inspection = null;
+    string? inspectionFailure = null;
+    if (account is not null)
+    {
+        try { inspection = await runner.InspectAsync(account.DistinguishedName, cancellationToken); }
+        catch (EntraSyncFailure failure) { inspectionFailure = EntraSyncFailure.SafeCode(failure.Code); }
+        catch when (!cancellationToken.IsCancellationRequested) { inspectionFailure = "request-failed"; }
+    }
+    return Results.Ok(new { samAccountName = sam, account, retries, inspection, inspectionFailure });
+}).RequireRateLimiting("entra-inspection");
 
 app.MapPost("/users/{sam}/password", async Task<IResult> (string sam, ChangePasswordRequest req, AdProvisioningService ad, HttpContext context) =>
 {
