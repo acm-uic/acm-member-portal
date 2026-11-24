@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { checkWindowsApiHealth, lookupDirectoryUser } from "./status";
+import {
+  checkWindowsApiHealth,
+  lookupDirectoryUser,
+  lookupEntraSync,
+} from "./status";
 
 describe("Windows API diagnostics", () => {
   const fetchMock = vi.fn<typeof fetch>();
@@ -9,6 +13,92 @@ describe("Windows API diagnostics", () => {
     fetchMock.mockReset();
   });
   afterEach(() => vi.unstubAllEnvs());
+
+  it("reports a member's export error and retry without forwarding raw backend details", async () => {
+    fetchMock.mockResolvedValue(
+      Response.json({
+        samAccountName: "alice",
+        account: {
+          distinguishedName: "CN=alice,OU=Members,DC=example,DC=org",
+          userPrincipalName: "alice@example.org",
+        },
+        retries: {
+          enabled: true,
+          directory: null,
+          userHash: {
+            id: "0e1e9404-25d9-44ef-93dc-13f17ffb5f1b",
+            attempts: 1000,
+            nextAttempt: "2026-11-24T01:09:05.5434662+00:00",
+            failureCode: "adsync-command-failed",
+          },
+        },
+        inspection: {
+          state: "export-error",
+          targetDn: "CN={1234}",
+          errorCode: "AttributeValueMustBeUnique",
+          conflictAttribute: "ProxyAddresses",
+          conflictValue: "shared@example.org",
+          conflictObjectId: "de25bfb1-ba24-4c2c-9e6d-78af2bb35f42",
+          passwordStatus: "TargetNotExportedToDirectory",
+          passwordCheckedAt: null,
+          rawError: "sensitive detail",
+        },
+        inspectionFailure: null,
+      }),
+    );
+
+    const result = await lookupEntraSync(" alice ", fetchMock);
+    expect(result).toMatchObject({
+      ok: true,
+      details: {
+        inspection: {
+          state: "export-error",
+          conflictAttribute: "ProxyAddresses",
+          conflictValue: "shared@example.org",
+        },
+        retries: { userHash: { attempts: 1000 } },
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain("sensitive detail");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://windows.test/api/users/alice/entra-sync",
+      expect.objectContaining({
+        headers: { authorization: "Bearer private-token" },
+        cache: "no-store",
+        redirect: "error",
+      }),
+    );
+  });
+
+  it("keeps AD absence, old Windows deployments, and an invalid backend response distinct", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("untrusted", { status: 404 }));
+    expect(await lookupEntraSync("alice", fetchMock)).toMatchObject({
+      ok: false,
+      httpStatus: 404,
+      message: expect.stringContaining("deployment"),
+    });
+    const noAccount = {
+      account: null,
+      retries: null,
+      inspection: null,
+      inspectionFailure: null,
+    };
+    fetchMock.mockResolvedValueOnce(
+      Response.json({ samAccountName: "alice", ...noAccount }),
+    );
+    expect(await lookupEntraSync("alice", fetchMock)).toMatchObject({
+      ok: true,
+      details: { account: null },
+      message: expect.stringContaining("not found"),
+    });
+    fetchMock.mockResolvedValueOnce(
+      Response.json({ samAccountName: "another-user", ...noAccount }),
+    );
+    expect(await lookupEntraSync("alice", fetchMock)).toMatchObject({
+      ok: false,
+      details: null,
+    });
+  });
 
   it("checks health without sending the token", async () => {
     fetchMock.mockResolvedValue(Response.json({ status: "ok" }));
@@ -83,7 +173,16 @@ describe("Windows API diagnostics", () => {
     );
   });
 
-  it.each(["", " ", ".", "..", "alice/bob", "alice\\bob", "a\nb", "a".repeat(65)])(
+  it.each([
+    "",
+    " ",
+    ".",
+    "..",
+    "alice/bob",
+    "alice\\bob",
+    "a\nb",
+    "a".repeat(65),
+  ])(
     "rejects invalid username %j before sending a request",
     async (username) => {
       expect(await lookupDirectoryUser(username, fetchMock)).toMatchObject({

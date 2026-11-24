@@ -1,6 +1,8 @@
 import { component$ } from "@builder.io/qwik";
 import {
+  Form,
   Link,
+  routeAction$,
   routeLoader$,
   useLocation,
   type RequestHandler,
@@ -15,18 +17,258 @@ import {
   PROVISIONING_STATUSES,
   STATUS_LABELS,
 } from "~/lib/provisioning/log-view";
+import {
+  lookupEntraSync,
+  type EntraSyncDetails,
+} from "~/lib/provisioning/status";
 
 export const onRequest: RequestHandler = async (event) => {
   await requireProvisioningLogAccess(event);
   event.headers.set("Cache-Control", "private, no-store");
 };
 export const useProvisioningLogs = routeLoader$(loadProvisioningPage);
+export const useEntraSync = routeAction$(async (data, event) => {
+  await requireProvisioningLogAccess(event);
+  return lookupEntraSync(String(data.username ?? ""));
+});
 
 const Timestamp = component$<{ value: string }>(({ value }) => (
   <time dateTime={value} class="whitespace-nowrap">
     {formatProvisioningTime(value)}
   </time>
 ));
+
+type Inspection = NonNullable<EntraSyncDetails["inspection"]>;
+type Retry = NonNullable<NonNullable<EntraSyncDetails["retries"]>["userHash"]>;
+const CONNECT_STATES: Record<Inspection["state"], string> = {
+  "ad-not-imported":
+    "The AD connector has no record for this account. Check OU scope and the last AD import.",
+  "source-sync-error":
+    "The AD connector reports a synchronization error. Open this account in Synchronization Service Manager for details.",
+  "metaverse-link-missing":
+    "The AD connector has the account, but it has no metaverse link. Check inbound rule scope and sync errors.",
+  "target-link-missing":
+    "The metaverse has the account, but it has no Entra connector link. Check outbound rule scope and cloudFiltered.",
+  "target-unavailable":
+    "The Entra connector record could not be identified. Check the connectors and run history in Synchronization Service Manager.",
+  "target-sync-error":
+    "The Entra connector reports a synchronization error. Open that connector object for details.",
+  "export-error": "Entra Connect reports an export error for this account.",
+  "target-linked":
+    "The account has an Entra connector link. Connect reports no current export error for it. Verify the account and its UPN in Entra.",
+};
+
+const FAILURE_GUIDANCE: Record<NonNullable<Retry["failureCode"]>, string> = {
+  "settings-unavailable":
+    "Check that the provisioning service can read a valid EntraSync settings.json file.",
+  "module-unavailable":
+    "Check that the ADSync PowerShell module loads under the provisioning service identity on the Connect server.",
+  "scheduler-unavailable":
+    "Check whether the provisioning service identity can read the Connect scheduler.",
+  "scheduler-suspended":
+    "Check whether Connect is in staging mode or its scheduler is suspended.",
+  "directory-disabled":
+    "The Connect scheduler has directory synchronization disabled.",
+  "directory-busy":
+    "A directory sync was already running when the worker tried to start one.",
+  "outside-managed-ou":
+    "Compare the account's AD distinguished name with UsersOu in the Connect settings file.",
+  "adsync-command-failed":
+    "The ADSync command failed. Check connector settings, service identity permissions, and the per-account connector status.",
+  "connect-read-failed":
+    "Connect could not read this account's sync records. Check the configured AD connector and the provisioning service identity's read access.",
+  "request-failed":
+    "The request failed. Check the AcmProvisioning Application log and the Connect service.",
+  timeout:
+    "PowerShell did not respond within the time limit. Check the Connect server and ADSync service.",
+};
+
+const SyncRetry = component$<{ label: string; job: Retry | null }>(
+  ({ label, job }) => (
+    <div>
+      <dt class="text-label">{label}</dt>
+      <dd class="m-0">
+        {job ? (
+          <>
+            {job.attempts
+              ? `Retry pending · ${job.attempts}${job.attempts === 1000 ? "+" : ""} failed attempts`
+              : "Queued"}
+            {" · Next attempt "}
+            <Timestamp value={job.nextAttempt} />
+            {job.failureCode && (
+              <p class="m-0">{FAILURE_GUIDANCE[job.failureCode]}</p>
+            )}
+            <p class="m-0 text-caption text-text3 break-all">Job ID {job.id}</p>
+          </>
+        ) : (
+          "No request pending"
+        )}
+      </dd>
+    </div>
+  ),
+);
+
+const EntraDiagnostics = component$<{ username?: string }>(({ username }) => {
+  const lookup = useEntraSync();
+  const details = lookup.value?.details;
+  const inspection = details?.inspection;
+  const duplicate =
+    inspection?.conflictAttribute ||
+    /^(?:duplicate-attribute|(?:Quarantined)?AttributeValueMustBeUnique|InvalidSoftMatch|ObjectTypeMismatch)$/i.test(
+      inspection?.errorCode ?? "",
+    );
+  return (
+    <section
+      class="p-lg rounded-control border border-border bg-surface1 grid gap-sm"
+      aria-labelledby="entra-heading"
+    >
+      <h2 id="entra-heading" class="font-display text-subheading m-0">
+        Entra sync diagnostics
+      </h2>
+      <Form action={lookup} class="flex flex-wrap items-end gap-sm">
+        <label class="grid gap-2xs text-label">
+          ACM username
+          <input
+            name="username"
+            value={username}
+            required
+            maxLength={64}
+            autoComplete="off"
+            class="h-[36px] px-sm rounded-control border border-border bg-surface2 text-body-sm text-text1"
+          />
+        </label>
+        <button
+          type="submit"
+          disabled={lookup.isRunning}
+          class="h-[36px] px-md rounded-control bg-accent text-white text-label cursor-pointer disabled:opacity-50"
+        >
+          {lookup.isRunning ? "Checking…" : "Check sync"}
+        </button>
+      </Form>
+      <div role="status" aria-live="polite" class="grid gap-sm text-body-sm">
+        {lookup.isRunning
+          ? "Checking the Windows provisioning service and Entra Connect…"
+          : lookup.value && (
+              <>
+                {lookup.value.message && (
+                  <p class="m-0">{lookup.value.message}</p>
+                )}
+                {details?.account && (
+                  <>
+                    <p class="m-0 break-all">
+                      <strong>
+                        {details.account.userPrincipalName ??
+                          details.samAccountName}
+                      </strong>
+                      <br />
+                      {details.account.distinguishedName}
+                    </p>
+                    <div class="grid gap-2xs">
+                      <p class="text-label m-0">Directory object sync</p>
+                      <p class="m-0">
+                        {inspection
+                          ? CONNECT_STATES[inspection.state]
+                          : details.inspectionFailure
+                            ? FAILURE_GUIDANCE[details.inspectionFailure]
+                            : "Connect could not return a status for this account."}
+                      </p>
+                      {inspection?.targetDn && (
+                        <p class="m-0 break-all">
+                          Entra connector DN <code>{inspection.targetDn}</code>
+                        </p>
+                      )}
+                      {inspection?.errorCode && (
+                        <p class="m-0">
+                          Error code <code>{inspection.errorCode}</code>
+                        </p>
+                      )}
+                      {inspection?.conflictAttribute && (
+                        <p class="m-0">
+                          Conflicting attribute{" "}
+                          <code>{inspection.conflictAttribute}</code>
+                          {inspection.conflictValue && (
+                            <>
+                              {" · "}
+                              <code>{inspection.conflictValue}</code>
+                            </>
+                          )}
+                        </p>
+                      )}
+                      {inspection?.conflictObjectId && (
+                        <p class="m-0 break-all">
+                          Conflicting Entra object ID{" "}
+                          <code>{inspection.conflictObjectId}</code>
+                        </p>
+                      )}
+                      {duplicate && (
+                        <p class="m-0">
+                          Look up the conflicting object in Entra and verify
+                          which account should own the value before correcting
+                          it in the source directory. For an SMTP conflict,
+                          check both AD <code>mail</code> and{" "}
+                          <code>proxyAddresses</code>.{" "}
+                          <a
+                            class="text-accent"
+                            href="https://learn.microsoft.com/en-us/entra/identity/hybrid/connect/how-to-connect-health-diagnose-sync-errors"
+                          >
+                            Microsoft duplicate attribute guidance
+                          </a>
+                        </p>
+                      )}
+                    </div>
+                    <div>
+                      <p class="text-label m-0">
+                        Last password hash sync result
+                      </p>
+                      <p class="m-0">
+                        {inspection?.passwordStatus === "unavailable" ? (
+                          "Connect's password sync history could not be read."
+                        ) : inspection?.passwordStatus ? (
+                          <>
+                            <code>{inspection.passwordStatus}</code>
+                            {inspection.passwordCheckedAt && (
+                              <>
+                                {" "}
+                                ·{" "}
+                                <Timestamp
+                                  value={inspection.passwordCheckedAt}
+                                />
+                              </>
+                            )}
+                          </>
+                        ) : (
+                          "No recent password sync result was returned."
+                        )}
+                      </p>
+                    </div>
+                    {details.retries?.enabled ? (
+                      <dl class="m-0 grid gap-sm">
+                        <SyncRetry
+                          label="Password hash request for this account"
+                          job={details.retries.userHash}
+                        />
+                        <SyncRetry
+                          label="Directory sync request (shared across all accounts)"
+                          job={details.retries.directory}
+                        />
+                      </dl>
+                    ) : (
+                      <p class="m-0">
+                        The provisioning service's sync request worker is
+                        disabled.
+                      </p>
+                    )}
+                  </>
+                )}
+                <p class="m-0 text-caption text-text3">
+                  Checked <Timestamp value={lookup.value.checkedAt} />
+                </p>
+              </>
+            )}
+      </div>
+    </section>
+  );
+});
 
 export default component$(() => {
   const data = useProvisioningLogs();
@@ -110,11 +352,6 @@ export default component$(() => {
                   </p>
                 )}
                 <p class="text-body-sm text-text2 m-0">
-                  Microsoft sign-in: synchronization is not verified by the
-                  portal. After activation, allow time for password
-                  synchronization before signing in.
-                </p>
-                <p class="text-body-sm text-text2 m-0">
                   Recorded attempt counter: {selected.attempts}. The counter
                   resets when an administrator retries; history is retained.
                 </p>
@@ -140,6 +377,7 @@ export default component$(() => {
                   Request ID: {selected.id}
                 </p>
               </section>
+              <EntraDiagnostics username={selected.username} />
               <section class="grid gap-sm" aria-labelledby="history-heading">
                 <h2
                   id="history-heading"
@@ -213,6 +451,7 @@ export default component$(() => {
         </>
       ) : (
         <>
+          <EntraDiagnostics />
           <form method="get" class="flex flex-wrap gap-md items-end">
             <label class="grid gap-2xs text-label">
               Applicant or username
@@ -309,9 +548,6 @@ export default component$(() => {
                           {row.activatedAt
                             ? "Initial password change recorded"
                             : "Initial password change not recorded"}
-                        </span>
-                        <span class="block text-caption text-text3">
-                          Microsoft sync unverified
                         </span>
                       </td>
                       <td class="py-md pr-md align-top border-t border-border text-text3">

@@ -23,7 +23,10 @@ public sealed class EntraSyncOptions
 // Operation labels, never credentials. Keep numeric values stable for existing queue files.
 public enum EntraSyncKind { Directory = 0, UserHash = 1 }
 public sealed record EntraSyncJob(string Key, Guid Id, EntraSyncKind Kind,
-    string? DistinguishedName, int Attempts, DateTimeOffset NextAttempt);
+    string? DistinguishedName, int Attempts, DateTimeOffset NextAttempt, string? FailureCode = null);
+
+public sealed record EntraSyncRetry(Guid Id, int Attempts, DateTimeOffset NextAttempt, string? FailureCode);
+public sealed record EntraSyncRetries(bool Enabled, EntraSyncRetry? Directory, EntraSyncRetry? UserHash);
 
 public interface IEntraSyncQueue
 {
@@ -87,7 +90,19 @@ public sealed class EntraSyncQueue : IEntraSyncQueue, IDisposable
                 .OrderBy(job => job.Kind).ThenBy(job => job.NextAttempt).FirstOrDefault();
     }
 
-    internal void Finish(EntraSyncJob job, bool succeeded, DateTimeOffset now)
+    internal EntraSyncRetries Inspect(string distinguishedName)
+    {
+        lock (_gate)
+        {
+            return new(_options.Enabled, RetryFor("directory"), RetryFor(Key(EntraSyncKind.UserHash, distinguishedName)));
+        }
+    }
+
+    private EntraSyncRetry? RetryFor(string key) => _jobs.TryGetValue(key, out var job)
+        ? new(job.Id, job.Attempts, job.NextAttempt, EntraSyncFailure.SafeCode(job.FailureCode))
+        : null;
+
+    internal void Finish(EntraSyncJob job, bool succeeded, DateTimeOffset now, string? failureCode = null)
     {
         lock (_gate)
         {
@@ -100,7 +115,8 @@ public sealed class EntraSyncQueue : IEntraSyncQueue, IDisposable
                 next[job.Key] = job with
                 {
                     Attempts = attempts,
-                    NextAttempt = now.AddSeconds(Math.Min(300, 15 * Math.Pow(2, Math.Min(attempts - 1, 5))))
+                    NextAttempt = now.AddSeconds(Math.Min(300, 15 * Math.Pow(2, Math.Min(attempts - 1, 5)))),
+                    FailureCode = EntraSyncFailure.SafeCode(failureCode)
                 };
             }
             Save(next);

@@ -44,6 +44,19 @@ try {
             $script:state.Connector = $ConnectorName
             $script:state.Dn = $DistinguishedName
         }
+        function script:Get-ADSyncCSObject { param($ConnectorName, $DistinguishedName, [switch]$SkipDNValidation, $ErrorAction)
+            if ($ConnectorName -eq 'acmuic.org') { $script:state.Source } else { $script:state.Target }
+        }
+        function script:Get-ADSyncConnector { param($ErrorAction)
+            [pscustomobject]@{ Name = 'acmuic.onmicrosoft.com - AAD'; SubType = 'Windows Azure Active Directory (Microsoft)' }
+        }
+        function script:Get-ADSyncMVObject { param($Identifier, $ErrorAction)
+            [pscustomobject]@{ Lineage = $script:state.Lineage }
+        }
+        function script:Get-ADSyncCSObjectLog { param($Identifier, $Count, $ErrorAction)
+            if ($script:state.LogUnavailable) { throw 'private log exception' }
+            [pscustomobject]@{ Type = 'PasswordSync'; Status = 'TargetNotExportedToDirectory'; TimeStamp = [datetime]'2026-10-01T02:03:04Z' }
+        }
     }
     $state = & $module { $script:state }
     Request-AcmEntraSync -Kind Directory
@@ -78,6 +91,29 @@ try {
     $state.Fail = $true
     Assert-Rejected { Request-AcmEntraSync -Kind Password -DistinguishedName $dn } 'ADSync errors must propagate for retry.'
     Assert-Rejected { Request-AcmEntraSync -Kind Directory } 'ADSync directory errors must propagate for retry.'
+
+    $result = Get-AcmEntraSyncInspection -DistinguishedName $dn
+    Assert-True ($result.State -eq 'ad-not-imported') 'An absent connector object must be distinguished from an inspection failure.'
+    $state.Source = [pscustomobject]@{ ObjectId = [guid]::NewGuid(); ConnectedMVObjectId = [guid]::NewGuid(); HasSyncError = $false }
+    $result = Get-AcmEntraSyncInspection -DistinguishedName $dn
+    Assert-True ($result.State -eq 'target-link-missing') 'An imported account can lack an Entra link.'
+    $state.Lineage = @(
+        [pscustomobject]@{ ConnectorName = 'acmuic.onmicrosoft.com - AAD'; ConnectedCsObjectDN = 'CN={1234}' }
+        [pscustomobject]@{ ConnectorName = 'acmuic.onmicrosoft.com - AAD'; ConnectedCsObjectDN = 'CN={1234}' }
+    )
+    $state.Target = [pscustomobject]@{
+        HasExportError = $true; HasSyncError = $false
+        ExportError = 'Unable to update this object [ProxyAddresses <pii>SMTP:shared@example.org</pii>]. ExtraErrorDetails: [{"Key":"ObjectIdInConflict","Value":["de25bfb1-ba24-4c2c-9e6d-78af2bb35f42"]},{"Key":"AttributeConflictName","Value":["ProxyAddresses"]},{"Key":"AttributeConflictValues","Value":["SMTP:shared@example.org"]}]. Unrelated detail: private@example.org'
+    }
+    $result = Get-AcmEntraSyncInspection -DistinguishedName $dn
+    Assert-True ($result.State -eq 'export-error' -and $result.ErrorCode -eq 'duplicate-attribute' -and $result.TargetDn -eq 'CN={1234}') 'Follow the metaverse to the Entra export error.'
+    Assert-True ($result.ConflictAttribute -eq 'ProxyAddresses' -and $result.ConflictValue -eq 'shared@example.org' -and $result.ConflictObjectId -eq 'de25bfb1-ba24-4c2c-9e6d-78af2bb35f42') 'Expose the structured duplicate-attribute details.'
+    Assert-True ($result.PasswordStatus -eq 'TargetNotExportedToDirectory' -and $result.PasswordCheckedAt) 'Report the last password status separately.'
+    Assert-True (($result | ConvertTo-Json) -notmatch 'private@example.org') 'The raw export error must not cross the process boundary.'
+    $state.LogUnavailable = $true
+    $state.Target.HasExportError = $false
+    $result = Get-AcmEntraSyncInspection -DistinguishedName $dn
+    Assert-True ($result.State -eq 'target-linked' -and $result.PasswordStatus -eq 'unavailable') 'Failure to read password history must not hide a directory result.'
     Write-Output "Passed $tests Entra sync PowerShell checks (all ADSync calls mocked)."
 } finally {
     Remove-Module $module -Force
@@ -93,7 +129,16 @@ function Request-AcmEntraSync {
     param($Kind, $DistinguishedName)
     [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'received.json'), (@{Kind=$Kind; Dn=$DistinguishedName} | ConvertTo-Json))
 }
-Export-ModuleMember -Function Request-AcmEntraSync
+function Get-AcmEntraSyncInspection {
+    param($DistinguishedName)
+    if ($DistinguishedName -eq 'failure') {
+        $exception = [InvalidOperationException]::new('private exception text')
+        $exception.Data['AcmSyncExitCode'] = 10
+        throw $exception
+    }
+    @{State = 'target-linked'; TargetDn = $DistinguishedName}
+}
+Export-ModuleMember -Function Request-AcmEntraSync, Get-AcmEntraSyncInspection
 '@
     [IO.File]::WriteAllText((Join-Path $fixture 'AcmEntraSync.psm1'), $stub)
     function Invoke-TransportFixture([string]$payload) {
@@ -122,6 +167,10 @@ Export-ModuleMember -Function Request-AcmEntraSync
     Assert-True ($result.ExitCode -eq 0) 'Valid stdin JSON must execute the local module.'
     $received = Get-Content -LiteralPath (Join-Path $fixture 'received.json') -Raw -Encoding UTF8 | ConvertFrom-Json
     Assert-True ($received.Dn -ceq $unicodeDn -and $received.Kind -eq 'Password') 'Unicode and shell-like text must survive as literal data.'
+    $result = Invoke-TransportFixture '{"Kind":"Inspect","DistinguishedName":"CN={1234}"}'
+    Assert-True ($result.ExitCode -eq 0 -and ($result.OutputText | ConvertFrom-Json).TargetDn -eq 'CN={1234}') 'The read-only protocol must return JSON.'
+    $result = Invoke-TransportFixture '{"Kind":"Inspect","DistinguishedName":"failure"}'
+    Assert-True ($result.ExitCode -eq 10 -and $result.ErrorText.Trim() -eq 'Entra synchronization request failed.') 'Only an allowlisted failure exit code may cross the process boundary.'
     foreach ($payload in @('not json', '{"Kind":"AnythingElse"}')) {
         $result = Invoke-TransportFixture $payload
         Assert-True ($result.ExitCode -ne 0 -and $result.ErrorText.Trim() -eq 'Entra synchronization request failed.') 'Invalid input must fail with a fixed error.'

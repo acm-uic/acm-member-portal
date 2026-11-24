@@ -33,6 +33,7 @@ public record UpdateUserRequest(
     string? PreferredName);
 
 public record CreateUserResponse(string SamAccountName, bool Existed, string? OneTimePassword);
+public record AdSyncAccount(string DistinguishedName, string? UserPrincipalName);
 public record ChangePasswordRequest(string CurrentPassword, string NewPassword);
 public record ActivateAccountRequest(string EventId, string CurrentPassword, string NewPassword);
 
@@ -83,6 +84,16 @@ public sealed class AdProvisioningService
                 throw new ProvisioningException($"AD lookup failed: {AdErrors.Format(ex)}");
             }
         });
+
+    internal Task<AdSyncAccount?> GetSyncAccountAsync(string samAccountName, CancellationToken cancellationToken) =>
+        Task.Run(() =>
+        {
+            using var user = FindUser(samAccountName);
+            if (user is null) return null;
+            var dn = user.Properties["distinguishedName"].Value as string
+                ?? throw new ProvisioningException("AD did not return a distinguished name.");
+            return new AdSyncAccount(dn, user.Properties["userPrincipalName"].Value as string);
+        }, cancellationToken);
 
     public Task<CreateUserResponse> CreateUserAsync(
         CreateUserRequest req, CancellationToken cancellationToken = default) =>
